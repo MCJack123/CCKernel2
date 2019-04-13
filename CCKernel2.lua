@@ -35,15 +35,17 @@ local permissions = {
     delete = 0x4,
     read_delete = 0x5,
     write_delete = 0x6,
-    deny_move = 0x7,
-    move = 0x8,
-    read_move = 0x9,
-    write_move = 0xA,
+    deny_execute = 0x7,
+    execute = 0x8,
+    read_execute = 0x9,
+    write_execute = 0xA,
     deny_delete = 0xB,
-    delete_move = 0xC,
+    delete_execute = 0xC,
     deny_write = 0xD,
     deny_read = 0xE,
-    full = 0xF
+    full = 0xF,
+    setuid = 0x10,
+    owner = 0x20
 }
 -- Config setting: Default permissions for users without an entry
 local default_permissions = permissions.full
@@ -245,6 +247,29 @@ local devfs = {
 
 local mounts = {["dev"] = devfs}
 
+function fs.linkDir(from, to)
+    if string.sub(from, string.len(from)) == "/" then from = string.sub(from, 1, string.len(from) - 1) end
+    if string.sub(to, 1, 1) == "/" then to = string.sub(to, 2) end
+    if string.sub(to, string.len(to)) == "/" then to = string.sub(to, 1, string.len(to) - 1) end
+    local combine = function(path) if string.sub(path, 1, 1) == "/" then return from .. path else return from .. "/" .. path end
+    mounts[to] = {
+        list = function(path) return fs.list(combine(path)) end,
+        exists = function(path) return fs.exists(combine(path)) end,
+        isDir = function(path) return fs.isDir(combine(path)) end,
+        getPermissions = function(path, uid) return fs.getPermissions(combine(path), uid) end,
+        setPermissions = function(path, uid, perm) return fs.setPermissions(combine(path), uid, perm) end,
+        getSize = function(path) return fs.getSize(combine(path)) end,
+        getFreeSpace = function(path) return fs.getFreeSpace(combine(path)) end,
+        makeDir = function(path) return fs.makeDir(combine(path)) end,
+        move = function(path, toPath) return fs.move(combine(path), toPath) end,
+        copy = function(path, toPath) return fs.copy(combine(path), toPath) end,
+        delete = function(path) return fs.delete(combine(path)) end,
+        open = function(path, mode) return fs.open(combine(path), mode) end
+    }
+end
+
+function fs.unlinkDir(to) if to ~= "dev" then mounts[to] = nil end end
+
 local function getMount(path)
     if string.sub(path, 1, 1) == "/" then path = string.sub(path, 2) end
     for k,v in pairs(mounts) do if string.find(path, k) == 1 then return v, string.sub(path, string.len(k) + 1) end end
@@ -258,13 +283,19 @@ fs.combine = orig_fs.combine
 fs.getDir = orig_fs.getDir
 fs.complete = orig_fs.complete
 fs.find = orig_fs.find
+fs.linkDir("rom/programs", "bin")
+fs.linkDir("rom/apis", "lib")
+fs.linkDir("rom/help", "man")
 
 function orig_fs.getPermissions(path, uid)
     if type(path) ~= "string" then error("bad argument #1 (string expected, got " .. type(path) .. ")", 3) end
     if type(uid) ~= "string" and type(uid) ~= "number" then error("bad argument #2 (number or string expected, got " .. type(path) .. ")", 3) end
     if orig_fs.getDrive(path) == "rom" then return permissions.read end
+    if not orig_fs.exists(path) then 
+        if not orig_fs.exists(fs.getDir(path)) then return permissions.none
+        elseif orig_fs.getPermissions()
+    end
     local default = orig_fs.isReadOnly(path) and permissions.read or permissions.full
-    if not orig_fs.exists(path) then return default end
     if not orig_fs.exists(orig_fs.getDir(path) .. "/.permissions") then 
         local file = orig_fs.open(orig_fs.getDir(path) .. "/.permissions", "w")
         if file ~= nil then
@@ -296,7 +327,7 @@ function orig_fs.setPermissions(path, uid, perm)
     local file = orig_fs.open(orig_fs.getDir(path) .. "/.permissions", "r")
     local perms = textutils.unserialize(file.readAll())
     file.close()
-    if not has_permission(perms, uid, permissions.write) then error(path .. ": Access denied", 3) end
+    if not has_permission(perms, uid, permissions.owner) then error(path .. ": Access denied", 3) end
     perms[orig_fs.getName(path)] = {[uid] = perm}
     local file = orig_fs.open(orig_fs.getDir(path) .. "/.permissions", "w")
     if file ~= nil then
@@ -373,7 +404,7 @@ end
 
 function fs.move(path, toPath)
     local m, p = getMount(path)
-    if not bmask(m.getPermissions(p, getuid()), permissions.move) then error(path .. ": Access denied", 2) end
+    if not bmask(m.getPermissions(p, getuid()), permissions.delete) or not bmask(m.getPermissions(p, getuid()), permissions.read) then error(path .. ": Access denied", 2) end
     if not bmask(fs.getPermissions(toPath, getuid()), permissions.write) then error(toPath .. ": Access denied", 2) end
     m.move(p, toPath)
     local file = fs.open(fs.getDir(path) .. "/.permissions", "r")
@@ -437,6 +468,31 @@ function fs.mount(path, mount)
     mounts[path] = mount
 end
 
+function fs.hasPermissions(path, uid, perm) return bmask(fs.getPermissions(path, uid), perm) end
+
 function fs.mounts() return mounts end
 
-function getuid() return 0 end
+-- Rewrite executor
+loadfile = function(_sFile, _tEnv)
+    if type( _sFile ) ~= "string" then
+        error( "bad argument #1 (expected string, got " .. type( _sFile ) .. ")", 2 ) 
+    end
+    if _tEnv ~= nil and type( _tEnv ) ~= "table" then
+        error( "bad argument #2 (expected table, got " .. type( _tEnv ) .. ")", 2 ) 
+    end
+    if not fs.hasPermissions( _sFile, nil, fs.permissions.execute ) then return nil, "Permission denied" end
+    local file = fs.open( _sFile, "r" )
+    if file then
+        local func, err = load( file.readAll(), fs.getName( _sFile ), "t", _tEnv )
+        file.close()
+        return func, err
+    end
+    return nil, "File not found"
+end
+
+-- User system
+os.loadAPI(shell.resolve("CCOSCrypto.lua"))
+
+-- Passwords are stored in /etc/passwd as a LON file with the format {UID = {password = sha256(pass), name = "name"}, ...}
+function setuid(uid) if _ENV._UID ~= 0 then return false else _ENV._UID = uid end end
+function getuid() return _ENV._UID end

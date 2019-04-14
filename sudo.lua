@@ -10,7 +10,7 @@ if not fs.hasPermissions(shell.getRunningProgram(), "*", fs.permissions.setuid) 
 end
 local i = 0
 while i < 3 do
-    write("[sudo] password for " .. users.getName(_G._SETUID) .. ": ")
+    write("[sudo] password for " .. users.getShortName(_G._SETUID) .. ": ")
     local password = read("")
     if users.checkPassword(_G._SETUID, password) then return shell.run(...) end
     print("Sorry, try again.")

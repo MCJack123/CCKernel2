@@ -9,8 +9,10 @@ if not fs.hasPermissions(shell.getRunningProgram(), "*", fs.permissions.setuid) 
     else error("su must be owned by 0 and have the setuid bit set") end
 end
 local uid = users.getUIDFromName(({...})[1] or "root")
-write("Password: ")
-local password = read("")
-if not users.checkPassword(uid, password) then error("Authentication failure") end
-users.setuid(uid)
+if users.getuid() ~= uid then
+    write("Password: ")
+    local password = read("")
+    if not users.checkPassword(uid, password) then error("Authentication failure") end
+    users.setuid(uid)
+end
 shell.run("/rom/programs/shell.lua")

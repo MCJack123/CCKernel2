@@ -6,7 +6,8 @@ Features: multiprocessing, IPC, permissions, signaling, virtual terminals, file 
 * [check] For IPC, we need to pull events sent from each coroutine into the run loop. Then we need to check the PID, name, etc. and resend the events into the parallel coroutines.
 * [check] For permissions, we need to rewrite the fs API to do virtual permission checks before opening the file. Storing permissions may have to be inside a hidden file at the root directory, storing the bits for permissions for each file.
 * [check] For signaling, we need IPC + checking the events sent for specific signals. If the name matches, then we either a) do what the signal means (SIGKILL, SIGTERM, SIGSTOP, etc.), or b) relay the signal into the program.
-* For virtual terminals, we need to have multiple copies of the term API that can be switched as needed.
+* [check] For virtual terminals, we need to have multiple copies of the term API that can be switched as needed.
+  * These copies are implemented as windows that are set visible or invisible depending on the VT currently being used.
 * [check] For file descriptors, we need to catch opening these files in the fs API, and return the respective file handle for the file descriptor. Possible descriptors:
   * /dev/random: file.read() returns math.random(0, 255)
   * /dev/zero: file.read() returns 0
@@ -24,6 +25,8 @@ This will be quite complicated and will fundamentally reshape CraftOS, but it wi
 ]]--
 
 if shell == nil then error("CCKernel2 must be run from the shell.") end
+if kernel ~= nil then error("CCKernel2 cannot be run inside itself.") end
+local myself = shell.getRunningProgram()
 
 -- FS rewrite
 
@@ -170,6 +173,10 @@ while i < 10 do
     i = i + 1
 end
 
+_G._UID = 0
+function setuid(uid) if _G._UID ~= 0 or uid == -1 then return true else _G._UID = uid end end
+function getuid() return _G._UID end
+
 local function get_permissions(perms, uid)
     if uid == 0 then return permissions.full end
     if perms[uid] ~= nil then return perms[uid]
@@ -202,7 +209,7 @@ function textutils.serializeFile(path, tab)
 end
 
 local orig_fs = fs
-fs = {}
+_G.fs = {}
 
 local devfs = {
     list = function(path)
@@ -293,6 +300,7 @@ end
 function fs.unlinkDir(to) if to ~= "dev" then mounts[to] = nil end end
 
 local function getMount(path)
+    if type(path) ~= "string" then error("bad argument #1 (expected string, got " .. type(path) .. ")", 5) end
     if string.sub(path, 1, 1) == "/" then path = string.sub(path, 2) end
     for k,v in pairs(mounts) do if string.find(path, k) == 1 then return v, string.sub(path, string.len(k) + 1) end end
     --print("orig_fs")
@@ -312,7 +320,7 @@ fs.linkDir("rom/help", "man")
 function orig_fs.getPermissions(path, uid)
     if type(path) ~= "string" then error("bad argument #1 (string expected, got " .. type(path) .. ")", 3) end
     if type(uid) ~= "string" and type(uid) ~= "number" then error("bad argument #2 (number or string expected, got " .. type(path) .. ")", 3) end
-    if orig_fs.getDrive(path) == "rom" then return permissions.read end
+    if orig_fs.getDrive(path) == "rom" then return permissions.read_execute end
     if not orig_fs.exists(path) then
         if not orig_fs.exists(fs.getDir(path)) then return permissions.none
         elseif not fs.hasPermissions(fs.getDir(path), uid, permissions.write) then return permissions.none
@@ -323,6 +331,7 @@ function orig_fs.getPermissions(path, uid)
         textutils.serializeFile(orig_fs.getDir(path) .. "/.permissions", {[orig_fs.getName(path)] = {["*"] = default}})
         return default
     end
+    if uid == 0 then return default end
     local perms = textutils.unserializeFile(orig_fs.getDir(path) .. "/.permissions")
     if perms[orig_fs.getName(path)] == nil then 
         perms[orig_fs.getName(path)] = {["*"] = default}
@@ -338,17 +347,20 @@ function orig_fs.setPermissions(path, uid, perm)
     if not orig_fs.exists(path) then error(path .. ": No such file", 3) end
     if orig_fs.getDrive(path) == "rom" then error(path .. ": Access denied", 3) end
     if not orig_fs.exists(orig_fs.getDir(path) .. "/.permissions") then 
-        textutils.serializeFile(orig_fs.getDir(path) .. "/.permissions", {[orig_fs.getName(path)] = {["*"] = default}})
+        textutils.serializeFile(orig_fs.getDir(path) .. "/.permissions", {[orig_fs.getName(path)] = {["*"] = default, [uid] = perm}})
+        return
     end
     local perms = textutils.unserializeFile(orig_fs.getDir(path) .. "/.permissions")
-    if perms.owner ~= nil and perms.owner ~= uid then error(path .. ": Access denied", 3) end
-    perms[orig_fs.getName(path)][uid] = perm
+    if perms[orig_fs.getName(path)] == nil then perms[orig_fs.getName(path)] = {["*"] = default, [uid] = perm}
+    else
+        if perms[orig_fs.getName(path)].owner ~= nil and perms[orig_fs.getName(path)].owner ~= _G._UID then error(path .. ": Access denied", 3) end
+        perms[orig_fs.getName(path)][uid] = perm 
+    end
     textutils.serializeFile(orig_fs.getDir(path) .. "/.permissions", perms)
 end
 
 function orig_fs.getOwner(path)
     if type(path) ~= "string" then error("bad argument #1 (string expected, got " .. type(path) .. ")", 3) end
-    if type(uid) ~= "string" and type(uid) ~= "number" then error("bad argument #2 (number or string expected, got " .. type(path) .. ")", 3) end
     if orig_fs.getDrive(path) == "rom" then return -1 end
     if not orig_fs.exists(path) then return nil end
     local default = orig_fs.isReadOnly(path) and permissions.read or permissions.full
@@ -356,7 +368,7 @@ function orig_fs.getOwner(path)
         textutils.serializeFile(orig_fs.getDir(path) .. "/.permissions", {[orig_fs.getName(path)] = {["*"] = default}})
         return
     end
-    local perms = textutils.unserializeFile({[orig_fs.getName(path)] = {["*"] = default}})
+    local perms = textutils.unserializeFile(orig_fs.getDir(path) .. "/.permissions")
     if perms[orig_fs.getName(path)] == nil then 
         perms[orig_fs.getName(path)] = {["*"] = default}
         textutils.serializeFile(orig_fs.getDir(path) .. "/.permissions", perms)
@@ -369,9 +381,16 @@ function orig_fs.setOwner(path, uid)
     if type(uid) ~= "string" and type(uid) ~= "number" then error("bad argument #2 (number or string expected, got " .. type(path) .. ")", 3) end
     if not orig_fs.exists(path) then error(path .. ": No such file", 3) end
     if orig_fs.getDrive(path) == "rom" then error(path .. ": Access denied", 3) end
+    if not orig_fs.exists(orig_fs.getDir(path) .. "/.permissions") then 
+        textutils.serializeFile(orig_fs.getDir(path) .. "/.permissions", {[orig_fs.getName(path)] = {["*"] = default, owner = uid}})
+        return
+    end
     local perms = textutils.unserializeFile(orig_fs.getDir(path) .. "/.permissions")
-    if perms.owner ~= nil and perms.owner ~= uid then error(path .. ": Access denied", 3) end
-    perms[orig_fs.getName(path)].owner = uid
+    if perms[orig_fs.getName(path)] == nil then perms[orig_fs.getName(path)] = {["*"] = default, owner = uid}
+    else
+        if perms[orig_fs.getName(path)].owner ~= nil and perms[orig_fs.getName(path)].owner ~= _G._UID then error(path .. ": Access denied", 3) end
+        perms[orig_fs.getName(path)].owner = uid
+    end
     textutils.serializeFile(orig_fs.getDir(path) .. "/.permissions", perms)
 end
 
@@ -412,7 +431,7 @@ end
 
 function fs.addPermissions(path, uid, perm)
     local m, p = getMount(path)
-    if uid == nil then uid = getuid() end
+    if uid == nil then uid =getuid() end
     return m.setPermissions(p, uid, bit.bor(m.getPermissions(p, uid), perm))
 end
 
@@ -449,9 +468,7 @@ function fs.makeDir(path)
     if fs.getDir(p) ~= "/" and fs.getDir(p) ~= "" and not fs.isDir(fs.getDir(p)) then error(fs.getDir(p) .. ": Directory not found") end
     if fs.getDir(p) ~= "/" and fs.getDir(p) ~= "" and not bmask(m.getPermissions(fs.getDir(p), getuid()), permissions.write) then error(path .. ": Access denied", 2) end
     m.makeDir(p)
-    local inperms = textutils.unserializeFile(fs.getDir(path) .. "/.permissions")
-    inperms[fs.getName(path)] = {["*"] = default_permissions}
-    textutils.serializeFile(fs.getDir(path) .. "/.permissions", inperms)
+    m.setPermissions(p, "*", fs.getPermissions(fs.getDir(path), "*"))
 end
 
 function fs.move(path, toPath)
@@ -509,7 +526,10 @@ function fs.mounts() return mounts end
 function fs.reset() fs = orig_fs end
 
 -- Rewrite executor
-loadfile = function( _sFile, _tEnv )
+local orig_loadfile = loadfile
+local nativeRun = os.run
+
+_G.loadfile = function( _sFile, _tEnv )
     if type( _sFile ) ~= "string" then
         error( "bad argument #1 (expected string, got " .. type( _sFile ) .. ")", 2 ) 
     end
@@ -521,41 +541,133 @@ loadfile = function( _sFile, _tEnv )
     if file then
         local func, err = load( file.readAll(), fs.getName( _sFile ), "t", _tEnv )
         file.close()
-        if fs.hasPermissions( _sFile, nil, fs.permissions.setuid ) then 
+        if fs.hasPermissions( _sFile, nil, fs.permissions.setuid ) and err == nil then 
             return function( ... )
                 local args = { ... }
                 _G._SETUID = _G._UID
                 _G._UID = fs.getOwner( _sFile )
-                local ok, err = pcall( function() func( table.unpack( args ) ) end )
+                local val = { pcall( function() func( table.unpack( args ) ) end ) }
                 _G._UID = _G._SETUID
+                if not table.remove(val, 1) then error(table.remove(val, 1), 3)
+                else return table.unpack(val) end
             end
         else return func, err end
     end
     return nil, "File not found"
 end
 
+function os.run( _tEnv, _sPath, ... )
+    if type( _tEnv ) ~= "table" then
+        error( "bad argument #1 (expected table, got " .. type( _tEnv ) .. ")", 2 ) 
+    end
+    if type( _sPath ) ~= "string" then
+        error( "bad argument #2 (expected string, got " .. type( _sPath ) .. ")", 2 ) 
+    end
+    local tEnv = _tEnv
+    setmetatable( tEnv, { __index = _G } )
+    local pid = kernel.exec( _sPath, tEnv, ... )
+    local _, p, s = os.pullEvent("process_complete")
+    if p ~= pid then while p ~= pid do _, p, s = os.pullEvent("process_complete") end end
+    return s
+end
+
+-- os.loadAPI paths
+local apipath = "/rom/apis:/usr/lib"
+function os.APIPath() return apipath end
+function os.setAPIPath( _sPath )
+    if type( _sPath ) ~= "string" then
+        error( "bad argument #1 (expected string, got " .. type( _sPath ) .. ")", 2 ) 
+    end
+    apipath = _sPath
+end
+
+local function apilookup( _sTopic )
+    if type( _sTopic ) ~= "string" then
+        error( "bad argument #1 (expected string, got " .. type( _sTopic ) .. ")", 2 ) 
+    end
+ 	-- Look on the path variable
+    for sPath in string.gmatch(apipath, "[^:]+") do
+    	sPath = fs.combine( sPath, _sTopic )
+    	if fs.exists( sPath ) and not fs.isDir( sPath ) then
+			return sPath
+        elseif fs.exists( sPath..".lua" ) and not fs.isDir( sPath..".lua" ) then
+		    return sPath..".lua"
+    	end
+    end
+	
+	-- Not found
+	return _sTopic
+end
+
+local tAPIsLoading = {}
+function os.loadAPI( _sPath )
+    if type( _sPath ) ~= "string" then
+        error( "bad argument #1 (expected string, got " .. type( _sPath ) .. ")", 2 ) 
+    end
+
+    _sPath = apilookup( _sPath )
+
+    local sName = fs.getName( _sPath )
+    if sName:sub(-4) == ".lua" then
+        sName = sName:sub(1,-5)
+    end
+    if tAPIsLoading[sName] == true then
+        printError( "API "..sName.." is already being loaded" )
+        return false
+    end
+    tAPIsLoading[sName] = true
+
+    local tEnv = {}
+    setmetatable( tEnv, { __index = _G } )
+    local fnAPI, err = loadfile( _sPath, tEnv )
+    if fnAPI then
+        local ok, err = pcall( fnAPI )
+        if not ok then
+            --os.debug(err)
+            printError( err )
+            tAPIsLoading[sName] = nil
+            return false
+        end
+    else
+        printError( err )
+        tAPIsLoading[sName] = nil
+        return false
+    end
+    
+    local tAPI = {}
+    for k,v in pairs( tEnv ) do
+        if k ~= "_ENV" then
+            tAPI[k] =  v
+        end
+    end
+
+    _G[sName] = tAPI    
+    tAPIsLoading[sName] = nil
+    return true
+end
+
 -- User system
 os.loadAPI(shell.resolve("CCOSCrypto.lua"))
 
 -- Passwords are stored in /etc/passwd as a LON file with the format {UID = {password = sha256(pass), name = "name"}, ...}
-_G._UID = 0
-function setuid(uid) if _G._UID ~= 0 or uid == -1 then return true else _G._UID = uid end end
-function getuid() return _G._UID end
-
+fs.makeDir("/usr")
+fs.makeDir("/usr/bin")
+fs.makeDir("/usr/share")
+fs.makeDir("/usr/lib")
 fs.makeDir("/etc")
 fs.makeDir("/home")
 if not fs.exists("/etc/passwd") then
     local user = {}
-    print("Please make a new basic user.")
+    print("Please create a new user.")
     write("Full name: ")
     user.fullName = read()
     write("Short name: ")
     user.name = read()
     while true do
         write("Password: ")
-        local pass = read()
+        local pass = read("")
         write("Confirm password: ")
-        if read() == pass then
+        if read("") == pass then
             user.password = CCOSCrypto.sha256(pass)
             break
         end
@@ -567,8 +679,10 @@ if not fs.exists("/etc/passwd") then
         [1] = user
     })
 end
+shell.setPath(shell.path() .. ":/usr/bin")
+help.setPath(help.path() .. ":/usr/share")
 
-users = {}
+_G.users = {}
 
 users.getuid = getuid
 users.setuid = setuid
@@ -585,13 +699,13 @@ end
 
 function users.getUIDFromName(name)
     local fl = textutils.unserializeFile("/etc/passwd")
-    for k,v in pairs(name) do if v.name == name then return k end end
+    for k,v in pairs(fl) do if v.name == name then return k end end
     return nil
 end
 
 function users.getUIDFromFullName(name)
     local fl = textutils.unserializeFile("/etc/passwd")
-    for k,v in pairs(name) do if v.name == name then return k end end
+    for k,v in pairs(fl) do if v.name == name then return k end end
     return nil
 end
 
@@ -612,21 +726,68 @@ function users.getHomeDir()
     return retval .. "/"
 end
 
+function users.create(name, uid)
+    if users.getuid() ~= 0 then error("Permission denied", 2) end
+    local fl = textutils.unserializeFile("/etc/passwd")
+    uid = uid or table.maxn(fl) + 1
+    fl[uid] = {name = name}
+    textutils.serializeFile("/etc/passwd", fl)
+end
+
+function users.setFullName(uid, name)
+    if users.getuid() ~= 0 and users.getuid() ~= uid then error("Permission denied", 2) end
+    local fl = textutils.unserializeFile("/etc/passwd")
+    if fl[uid] == nil then error("User ID " .. uid .. " does not exist", 2) end
+    fl[uid].fullName = name
+    textutils.serializeFile("/etc/passwd", fl)
+end
+
+function users.setPassword(uid, password)
+    if users.getuid() ~= 0 and users.getuid() ~= uid then error("Permission denied", 2) end
+    local fl = textutils.unserializeFile("/etc/passwd")
+    if fl[uid] == nil then error("User ID " .. uid .. " does not exist", 2) end
+    fl[uid].password = CCOSCrypto.sha256(password)
+    textutils.serializeFile("/etc/passwd", fl)
+end
+
+function users.delete(uid)
+    if users.getuid() ~= 0 then error("Permission denied", 2) end
+    local fl = textutils.unserializeFile("/etc/passwd")
+    fl[uid] = nil
+    textutils.serializeFile("/etc/passwd", fl)
+end
+
+function users.hasBlankPassword(uid) return textutils.unserializeFile("/etc/passwd")[uid].password == nil end
+
+
 -- Debugger in error function
 local orig_error = error
-os.debug_enabled = true
+os.debug_enabled = false
 _ENV.error = function(message, level)
     if os.debug_enabled then 
         printError("Error caught: ", message)
-        os.run(_ENV, "/rom/programs/lua.lua")
+        nativeRun(_ENV, "/rom/programs/lua.lua")
     end
-    orig_error(message, level)
+    orig_error(message, level + 1)
 end
 
+-- Virtual terminals
+local vts = {}
+local currentVT = 1
+i = 1
+while i < 9 do
+    local w, h = term.getSize()
+    vts[i] = window.create(term.native(), 1, 1, w, h, false)
+    vts[i].started = false
+    i = i + 1
+end
+vts[currentVT].setVisible(true)
+vts[currentVT].started = true
+
 -- Actual kernel runtime
-kernel = {}
-signal = {}
-signal = {
+_G.kernel = {}
+_G.signal = {}
+_G.signal = {
     SIGHUP = 1,
     SIGINT = 2,
     SIGQUIT = 3,
@@ -645,18 +806,35 @@ signal = {
     SIGSTOP = 16,
     SIGCONT = 17,
     SIGIO = 18,
-    getName = function(sig) for k,v in signal do if sig == v then return k end end end
+    getName = function(sig) for k,v in pairs(signal) do if sig == v then return k end end end
 }
 
 local process_table = {}
 local nativeQueueEvent = os.queueEvent
-function kernel.exec(path, ...) os.queueEvent("kcall_start_process", path, ...) end
-function kernel.fork(func, ...) os.queueEvent("kcall_fork_process", func, ...) end
+local pidenv = {}
+function kernel.exec(path, env, ...) 
+    if type(env) == "table" then 
+        pidenv[_G._PID] = env
+        os.queueEvent("kcall_start_process", path, ...)
+    else os.queueEvent("kcall_start_process", path, env, ...) end
+    local _, pid = os.pullEvent("process_started")
+    return pid
+end
+function kernel.fork(func, env, ...) 
+    if type(env) == "table" then 
+        pidenv[_G._PID] = env
+        os.queueEvent("kcall_fork_process", func, ...)
+    else os.queueEvent("kcall_fork_process", func, env, ...) end 
+    local _, pid = os.pullEvent("process_started")
+    return pid
+end
 function kernel.kill(pid, sig) os.queueEvent(signal.getName(sig), pid) end
 function kernel.signal(sig, handler) os.queueEvent("kcall_signal_handler", sig, handler) end
 function kernel.send(pid, ev, ...) nativeQueueEvent(ev, "CustomEvent,PID="..tostring(pid), ...) end
 function kernel.broadcast(ev, ...) kernel.send(0, ev, ...) end
 function kernel.getPID() return _G._PID end
+function kernel.chvt(id) os.queueEvent("kcall_change_vt", id) end
+function kernel.getvt() return currentVT end
 
 function kernel.getProcesses()
     os.queueEvent("kcall_get_process_table")
@@ -674,34 +852,105 @@ function kernel.recieve(handlers)
     end
 end
 
+function deepcopy(orig, level)
+    level = level or 0
+    local orig_type = type(orig)
+    local copy
+    if orig_type == 'table' and level < 200 and orig ~= _ENV and orig ~= _G and orig._ENV ~= orig then
+        copy = {}
+        for orig_key, orig_value in next, orig, nil do
+            if orig ~= orig_value and orig_key ~= "env" then copy[deepcopy(orig_key, level + 1)] = deepcopy(orig_value, level + 1)
+            else copy[orig_key] = orig_value end
+        end
+        --if getmetatable(orig) ~= nil and getmetatable(orig).__index ~= _G then setmetatable(copy, deepcopy(getmetatable(orig))) end
+    else -- number, string, boolean, etc
+        copy = orig
+    end
+    return copy
+end
+
+local function wrappedRun( _tEnv, _sPath, ... )
+    if type( _tEnv ) ~= "table" then
+        error( "bad argument #1 (expected table, got " .. type( _tEnv ) .. ")", 2 ) 
+    end
+    if type( _sPath ) ~= "string" then
+        error( "bad argument #2 (expected string, got " .. type( _sPath ) .. ")", 2 ) 
+    end
+    --os.debug("Executing " .. _sPath)
+    local tArgs = table.pack( ... )
+    local tEnv = _tEnv
+    setmetatable( tEnv, { __index = _G } )
+    if _G.shell ~= nil and (_G.shell == {} or _G.shell.run == nil) then _G.shell = nil end
+    if tEnv.shell ~= nil and (tEnv.shell == {} or tEnv.shell.run == nil) then tEnv.shell = nil end
+    local fnFile, err = loadfile( _sPath, tEnv )
+    if fnFile then
+        local ok, err = pcall( function()
+            --os.debug("Starting")
+            fnFile( table.unpack( tArgs, 1, tArgs.n ) )
+        end )
+        if not ok then
+            if err and err ~= "" then
+                printError( err )
+            end
+            --os.debug("Run failed")
+            return false
+        end
+        --os.debug("Run succeeded")
+        return true
+    end
+    if err and err ~= "" then
+        printError( err )
+    end
+    --os.debug("?")
+    return false
+end
+
 function os.queueEvent(ev, ...) nativeQueueEvent(ev, "CustomEvent,PID=" .. _G._PID, ...) end
 
 fs.setPermissions(shell.resolveProgram("login"), "*", bit.bor(fs.permissions.setuid, fs.permissions.read_execute))
 fs.setOwner(shell.resolveProgram("login"), 0)
 
 local oldPath = shell.path()
+local kernel_running = true
 --if shell ~= nil then shell.setPath(oldPath .. ":/" .. CCKitGlobals.CCKitDir .. "/ktools") end
-table.insert(process_table, {coro=coroutine.create(os.run), path=shell.resolveProgram("login"), started=false, filter=nil, args={...}, signals={}, user=0})
---term.clear()
---term.setCursorPos(1, 1)
+table.insert(process_table, {coro=coroutine.create(nativeRun), path=shell.resolveProgram("login"), started=false, filter=nil, args={...}, signals={}, user=0, vt=1, loggedin=true, env=_ENV})
+term.clear()
+term.setCursorPos(1, 1)
+local orig_shell = shell
 while kernel_running do
-    if process_table[1] == nil or process_table[1].path ~= first_program then
+    if not vts[currentVT].started then 
+        table.insert(process_table, {coro=coroutine.create(nativeRun), path=shell.resolveProgram("login"), started=false, filter=nil, args={...}, signals={}, user=0, vt=currentVT, parent=0, loggedin=false, env=_ENV}) 
+        vts[currentVT].started = true
+    end
+    local e = {os.pullEvent()}
+    if process_table[1] == nil then
         --log:log("First process stopped, ending CCKernel")
         print("Press any key to continue.")
         read()
         kernel_running = false
     end
-    local e = {os.pullEvent()}
-    if e[1] == "key" and e[2] == keys.f12 then
-        _G._PID = nil
-        print("Kernel paused.")
-        _ENV.kill_kernel=function() 
-            nativeQueueEvent("kcall_kill_process", 0)
-            getfenv(2).exit()
+    if e[1] == "key" and keys.getName(e[2]) ~= nil and string.find(keys.getName(e[2]), "f%d+") == 1 then
+        local num = tonumber(string.sub(keys.getName(e[2]), 2))
+        if num >= 1 and num <= 8 then
+            vts[currentVT].setVisible(false)
+            term.clear()
+            vts[num].setVisible(true)
+            currentVT = num
+            if not vts[num].started then 
+                table.insert(process_table, {coro=coroutine.create(nativeRun), path=shell.resolveProgram("login"), started=false, filter=nil, args={...}, signals={}, user=0, vt=num, loggedin=false, parent=0, env=_ENV}) 
+                vts[num].started = true
+            end
+        elseif num == 12 then
+            _G._PID = nil
+            print("Kernel paused.")
+            _ENV.kill_kernel=function() 
+                kernel_running = false
+                --getfenv(2).exit()
+            end
+            print("Entering debugger.")
+            nativeRun(_ENV, "/rom/programs/lua.lua")
+            print("Resuming.")
         end
-        print("Entering debugger.")
-        os.run(_ENV, "/rom/programs/lua.lua")
-        print("Resuming.")
     end
     local PID = 0
     if type(e[2]) == "string" and string.find(e[2], "CustomEvent,PID=") ~= nil then
@@ -711,14 +960,17 @@ while kernel_running do
     end
     if e[1] == "kcall_get_process_table" then
         e[2] = deepcopy(process_table)
-        e[2][0] = {coro=nil, path=shell.getRunningProgram(), started=true, filter=nil, stopped=false, args={}, signals={}, user=0}
+        e[2][0] = {coro=nil, path=myself, started=true, filter=nil, stopped=false, args={}, signals={}, user=0, vt=0, loggedin=true, parent=0}
+    elseif e[1] == "kcall_login_changed" and process_table[PID].user == 0 then
+        process_table[PID].loggedin = e[2]
+        if not e[2] then vts[process_table[PID].vt].started = false end
     end
     if signal[e[1]] ~= nil then
         local sig = signal[e[1]]
         local pid = e[2]
         if process_table[pid] ~= nil then
             if sig == signal.SIGKILL and process_table[PID].user == 0 then
-                table.remove(process_table, pid)
+                kernel.send(table.remove(process_table, pid).parent, "process_complete", pid, false)
                 local c = term.getTextColor()
                 term.setTextColor(colors.red)
                 print("Killed")
@@ -726,35 +978,47 @@ while kernel_running do
             elseif sig == signal.SIGINT then
                 local continue = true
                 if process_table[pid].signals[signal.SIGINT] ~= nil then continue = process_table[pid].signals[signal.SIGINT](signal.SIGINT) end
-                if continue then table.remove(process_table, e[2]) end
+                if continue then kernel.send(table.remove(process_table, pid).parent, "process_complete", pid, false) end
             elseif sig == signal.SIGSTOP then
                 process_table[pid].stopped = true
             elseif sig == signal.SIGCONT then
                 process_table[pid].stopped = false
             elseif (sig == signal.SIGBUS or sig == signal.SIGFPE or sig == signal.SIGILL or sig == signal.SIGIO or sig == signal.SIGPIPE or sig == signal.SIGSEGV or sig == signal.SIGTERM or sig == signal.SIGTRAP) and process_table[PID].user == 0 then
                 if process_table[pid].signals[sig] ~= nil then process_table[pid].signals[sig](sig) end
-                table.remove(process_table, pid)
+                kernel.send(table.remove(process_table, pid).parent, "process_complete", pid, false)
             elseif process_table[pid].signals[sig] ~= nil then process_table[pid].signals[sig](sig) end
         end
     elseif e[1] == "kcall_start_process" then
         table.remove(e, 1)
         local path = table.remove(e, 1)
-        local env = {}
-        if type(e[1]) == "table" then env = table.remove(e, 1) end
-        table.insert(process_table, {coro=coroutine.create(os.run), path=path, started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user})
+        local env = pidenv[PID]
+        table.insert(process_table, {coro=coroutine.create(nativeRun), path=path, started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=true, parent=PID})
+        pidenv[PID] = nil
+        kernel.send(PID, "process_started", #process_table)
     elseif e[1] == "kcall_fork_process" then
         table.remove(e, 1)
         local func = table.remove(e, 1)
-        local env = {}
-        local path = table.remove(e, 1)
-        if type(e[1]) == "table" then env = table.remove(e, 1) end
-        table.insert(process_table, {coro=coroutine.create(func), path=path, started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user})
+        local env = pidenv[PID]
+        table.insert(process_table, {coro=coroutine.create(func), path="(function)", started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=true, parent=PID})
+        kernel.send(PID, "process_started", #process_table)
     elseif e[1] == "kcall_signal_handler" then
         process_table[PID].signals[e[1]] = e[2]
+    elseif e[1] == "kcall_change_vt" then
+        if e[2] > 0 and e[2] <= 8 then
+            vts[currentVT].setVisible(false)
+            term.clear()
+            vts[e[2]].setVisible(true)
+            currentVT = e[2]
+        end
     else
         local delete = {}
+        local loggedin = false
         for k,v in pairs(process_table) do
-            if not v.stopped and v.filter == nil or v.filter == e[1] then
+            if v.loggedin then loggedin = true end
+            if not v.stopped and (v.filter == nil or v.filter == e[1]) and (v.vt == currentVT or not (
+                e[1] == "key" or e[1] == "char" or e[1] == "key_up" or e[1] == "paste" or
+                e[1] == "mouse_click" or e[1] == "mouse_up" or e[1] == "mouse_drag" or 
+                e[1] == "mouse_scroll" or e[1] == "monitor_touch")) then
                 local err = true
                 local res = nil
                 if v.started then
@@ -762,39 +1026,61 @@ while kernel_running do
                         _G._PID = k
                         _G._FORK = false
                         _G._UID = v.user
-                        if v.env ~= nil then for r,n in pairs(v.env) do _G[r] = n end end
+                        --if v.env ~= nil then for r,n in pairs(v.env) do _G[r] = n end end
+                        --shell = nil
+                        term.redirect(vts[v.vt])
                         err, res = coroutine.resume(v.coro, unpack(e))
-                        if v.env ~= nil then for r,n in pairs(v.env) do _G[r] = nil end end
+                        term.redirect(term.native())
+                        --shell = orig_shell
+                        --if v.env ~= nil then for r,n in pairs(v.env) do _G[r] = nil end end
                         v.user = _G._UID
                     end
                 else
                     _G._PID = k
                     _G._FORK = true -- only check this before first yield
                     _G._UID = v.user
-                    if v.env ~= nil then for r,n in pairs(v.env) do _G[r] = n end end
-                    err, res = coroutine.resume(v.coro, _ENV, v.path, unpack(v.args))
-                    if v.env ~= nil then for r,n in pairs(v.env) do _G[r] = nil end end
+                    _G.shell = nil
+                    --if v.env ~= nil then for r,n in pairs(v.env) do _G[r] = n end end
+                    --shell = nil
+                    --_ENV.shell = nil
+                    if vts[v.vt] == nil then
+                        print(v.vt)
+                        os.sleep(5)
+                    end
+                    term.redirect(vts[v.vt])
+                    if v.env == nil then v.env = {} end
+                    err, res = coroutine.resume(v.coro, v.env, v.path, unpack(v.args))
+                    term.redirect(term.native())
+                    --_ENV.shell = orig_shell
+                    --shell = orig_shell
+                    --if v.env ~= nil then for r,n in pairs(v.env) do _G[r] = nil end end
                     v.started = true
                     v.user = _G._UID
                 end
-                if not err then
-                    printError("Process couldn't resume or threw an error")
-                    table.insert(delete, k)
-                end
-                if coroutine.status(v.coro) == "dead" then table.insert(delete, k) end
-                if res ~= nil then v.filter = res else v.filter = nil end -- assuming every yield is for pullEvent, this may be unsafe
+                if not err then table.insert(delete, {f=k, s=false})
+                elseif coroutine.status(v.coro) == "dead" then table.insert(delete, {f=k, s=true, r=res})
+                elseif res ~= nil then v.filter = res else v.filter = nil end -- assuming every yield is for pullEvent, this may be unsafe 
             end
         end
-        for k,v in pairs(delete) do table.remove(process_table, v) end
+        for k,v in pairs(delete) do kernel.send(table.remove(process_table, v.f).parent, "process_complete", v.f, v.s, v.r) end
+        if not loggedin then break end
     end
 end
 term.setBackgroundColor(colors.black)
 term.setTextColor(colors.white)
---term.clear()
---term.setCursorPos(1, 1)
+term.clear()
+term.setCursorPos(1, 1)
+os.run = nativeRun
 os.queueEvent = nativeQueueEvent
 error = orig_error
-fs = orig_fs
+
+_G.fs = orig_fs
+_G.loadfile = orig_loadfile
 _G._PID = nil
+_G._UID = nil
+_G.kernel = nil
+_G.users = nil
+_G.signals = nil
+currentVT = nil
 if shell ~= nil then shell.setPath(oldPath) end
 --os.shutdown()

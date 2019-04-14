@@ -594,7 +594,10 @@ local function apilookup( _sTopic )
 		    return sPath..".lua"
     	end
     end
-	
+    
+    -- Check shell
+    if shell ~= nil then return shell.resolveProgram(_sTopic) end
+    
 	-- Not found
 	return _sTopic
 end
@@ -646,9 +649,9 @@ function os.loadAPI( _sPath )
     return true
 end
 
--- User system
-os.loadAPI(shell.resolve("CCOSCrypto.lua"))
+os.loadAPI("CCOSCrypto")
 
+-- User system
 -- Passwords are stored in /etc/passwd as a LON file with the format {UID = {password = sha256(pass), name = "name"}, ...}
 fs.makeDir("/usr")
 fs.makeDir("/usr/bin")

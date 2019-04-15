@@ -28,8 +28,90 @@ if shell == nil then error("CCKernel2 must be run from the shell.") end
 if kernel ~= nil then error("CCKernel2 cannot be run inside itself.") end
 local myself = shell.getRunningProgram()
 
--- FS rewrite
+-- os.loadAPI paths
+local apipath = "/rom/apis:/usr/lib"
+function os.APIPath() return apipath end
+function os.setAPIPath( _sPath )
+    if type( _sPath ) ~= "string" then
+        error( "bad argument #1 (expected string, got " .. type( _sPath ) .. ")", 2 ) 
+    end
+    apipath = _sPath
+end
 
+local function apilookup( _sTopic )
+    if type( _sTopic ) ~= "string" then
+        error( "bad argument #1 (expected string, got " .. type( _sTopic ) .. ")", 2 ) 
+    end
+ 	-- Look on the path variable
+    for sPath in string.gmatch(apipath, "[^:]+") do
+    	sPath = fs.combine( sPath, _sTopic )
+    	if fs.exists( sPath ) and not fs.isDir( sPath ) then
+			return sPath
+        elseif fs.exists( sPath..".lua" ) and not fs.isDir( sPath..".lua" ) then
+		    return sPath..".lua"
+    	end
+    end
+    
+    -- Check shell
+    if shell ~= nil then return shell.resolveProgram(_sTopic) end
+    
+	-- Not found
+	return _sTopic
+end
+
+local tAPIsLoading = {}
+function os.loadAPI( _sPath )
+    if type( _sPath ) ~= "string" then
+        error( "bad argument #1 (expected string, got " .. type( _sPath ) .. ")", 2 ) 
+    end
+
+    _sPath = apilookup( _sPath )
+
+    local sName = fs.getName( _sPath )
+    if sName:sub(-4) == ".lua" then
+        sName = sName:sub(1,-5)
+    end
+    if tAPIsLoading[sName] == true then
+        printError( "API "..sName.." is already being loaded" )
+        return false
+    end
+    tAPIsLoading[sName] = true
+
+    local tEnv = {}
+    setmetatable( tEnv, { __index = _G } )
+    local fnAPI, err = loadfile( _sPath, tEnv )
+    if fnAPI then
+        local ok, err = pcall( fnAPI )
+        if not ok then
+            --os.debug(err)
+            printError( err )
+            tAPIsLoading[sName] = nil
+            return false
+        end
+    else
+        printError( err )
+        tAPIsLoading[sName] = nil
+        return false
+    end
+    
+    local tAPI = {}
+    for k,v in pairs( tEnv ) do
+        if k ~= "_ENV" then
+            tAPI[k] =  v
+        end
+    end
+
+    _G[sName] = tAPI    
+    tAPIsLoading[sName] = nil
+    return true
+end
+
+os.loadAPI("CCOSCrypto")
+os.loadAPI("CCLog")
+CCLog.default.consoleLogLevel = CCLog.logLevels.info
+local kernelLog = CCLog("CCKernel2")
+
+-- FS rewrite
 -- Permissions will be in a table with the key being the user ID and the value being a bitmask of the permissions allowed for that user.
 -- A key of "*" will specify all users.
 local permissions = {
@@ -54,6 +136,7 @@ local permissions = {
 -- Config setting: Default permissions for users without an entry
 local default_permissions = permissions.full
 
+kernelLog:debug("Initializing device files", "fs")
 local deviceFiles = {
 	random = {
         rb = {
@@ -208,6 +291,7 @@ function textutils.serializeFile(path, tab)
     file.close()
 end
 
+kernelLog:debug("Initializing filesystem", "fs")
 local orig_fs = fs
 _G.fs = {}
 
@@ -571,92 +655,15 @@ function os.run( _tEnv, _sPath, ... )
     return s
 end
 
--- os.loadAPI paths
-local apipath = "/rom/apis:/usr/lib"
-function os.APIPath() return apipath end
-function os.setAPIPath( _sPath )
-    if type( _sPath ) ~= "string" then
-        error( "bad argument #1 (expected string, got " .. type( _sPath ) .. ")", 2 ) 
-    end
-    apipath = _sPath
-end
-
-local function apilookup( _sTopic )
-    if type( _sTopic ) ~= "string" then
-        error( "bad argument #1 (expected string, got " .. type( _sTopic ) .. ")", 2 ) 
-    end
- 	-- Look on the path variable
-    for sPath in string.gmatch(apipath, "[^:]+") do
-    	sPath = fs.combine( sPath, _sTopic )
-    	if fs.exists( sPath ) and not fs.isDir( sPath ) then
-			return sPath
-        elseif fs.exists( sPath..".lua" ) and not fs.isDir( sPath..".lua" ) then
-		    return sPath..".lua"
-    	end
-    end
-    
-    -- Check shell
-    if shell ~= nil then return shell.resolveProgram(_sTopic) end
-    
-	-- Not found
-	return _sTopic
-end
-
-local tAPIsLoading = {}
-function os.loadAPI( _sPath )
-    if type( _sPath ) ~= "string" then
-        error( "bad argument #1 (expected string, got " .. type( _sPath ) .. ")", 2 ) 
-    end
-
-    _sPath = apilookup( _sPath )
-
-    local sName = fs.getName( _sPath )
-    if sName:sub(-4) == ".lua" then
-        sName = sName:sub(1,-5)
-    end
-    if tAPIsLoading[sName] == true then
-        printError( "API "..sName.." is already being loaded" )
-        return false
-    end
-    tAPIsLoading[sName] = true
-
-    local tEnv = {}
-    setmetatable( tEnv, { __index = _G } )
-    local fnAPI, err = loadfile( _sPath, tEnv )
-    if fnAPI then
-        local ok, err = pcall( fnAPI )
-        if not ok then
-            --os.debug(err)
-            printError( err )
-            tAPIsLoading[sName] = nil
-            return false
-        end
-    else
-        printError( err )
-        tAPIsLoading[sName] = nil
-        return false
-    end
-    
-    local tAPI = {}
-    for k,v in pairs( tEnv ) do
-        if k ~= "_ENV" then
-            tAPI[k] =  v
-        end
-    end
-
-    _G[sName] = tAPI    
-    tAPIsLoading[sName] = nil
-    return true
-end
-
-os.loadAPI("CCOSCrypto")
-
 -- User system
 -- Passwords are stored in /etc/passwd as a LON file with the format {UID = {password = sha256(pass), name = "name"}, ...}
+kernelLog("Initializing user system", "users")
 fs.makeDir("/usr")
 fs.makeDir("/usr/bin")
 fs.makeDir("/usr/share")
 fs.makeDir("/usr/lib")
+fs.makeDir("/var")
+fs.makeDir("/var/logs")
 fs.makeDir("/etc")
 fs.makeDir("/home")
 if not fs.exists("/etc/passwd") then
@@ -762,7 +769,6 @@ end
 
 function users.hasBlankPassword(uid) return textutils.unserializeFile("/etc/passwd")[uid].password == nil end
 
-
 -- Debugger in error function
 local orig_error = error
 os.debug_enabled = false
@@ -788,6 +794,7 @@ vts[currentVT].setVisible(true)
 vts[currentVT].started = true
 
 -- Actual kernel runtime
+kernelLog:debug("Initializing kernel calls")
 _G.kernel = {}
 _G.signal = {}
 _G.signal = {
@@ -855,6 +862,8 @@ function kernel.recieve(handlers)
     end
 end
 
+kernel.log = kernelLog
+
 function deepcopy(orig, level)
     level = level or 0
     local orig_type = type(orig)
@@ -910,16 +919,19 @@ end
 
 function os.queueEvent(ev, ...) nativeQueueEvent(ev, "CustomEvent,PID=" .. _G._PID, ...) end
 
-fs.setPermissions(shell.resolveProgram("login"), "*", bit.bor(fs.permissions.setuid, fs.permissions.read_execute))
-fs.setOwner(shell.resolveProgram("login"), 0)
+local firstProgram = shell.resolveProgram("login")
+
+fs.setPermissions(firstProgram, "*", bit.bor(fs.permissions.setuid, fs.permissions.read_execute))
+fs.setOwner(firstProgram, 0)
 
 local oldPath = shell.path()
 local kernel_running = true
 --if shell ~= nil then shell.setPath(oldPath .. ":/" .. CCKitGlobals.CCKitDir .. "/ktools") end
-table.insert(process_table, {coro=coroutine.create(nativeRun), path=shell.resolveProgram("login"), started=false, filter=nil, args={...}, signals={}, user=0, vt=1, loggedin=true, env=_ENV})
+table.insert(process_table, {coro=coroutine.create(nativeRun), path=firstProgram, started=false, filter=nil, args={...}, signals={}, user=0, vt=1, loggedin=true, env=_ENV})
 term.clear()
 term.setCursorPos(1, 1)
 local orig_shell = shell
+kernel.log:info("Starting CCKernel2.")
 while kernel_running do
     if not vts[currentVT].started then 
         table.insert(process_table, {coro=coroutine.create(nativeRun), path=shell.resolveProgram("login"), started=false, filter=nil, args={...}, signals={}, user=0, vt=currentVT, parent=0, loggedin=false, env=_ENV}) 

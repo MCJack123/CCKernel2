@@ -3,6 +3,7 @@ term.clear()
 print(os.version() .. " tty" .. tostring(kernel.getvt()) .. "\n")
 if fs.setPermissions == nil then error("This requires CCKernel2.") end
 if users.getuid() ~= 0 then error("login must run as user 0") end
+CCLog.default.consoleLogLevel = CCLog.logLevels.error
 while true do
     write("Login: ")
     local uid = users.getUIDFromName(read())

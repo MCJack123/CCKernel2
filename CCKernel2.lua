@@ -27,6 +27,8 @@ This will be quite complicated and will fundamentally reshape CraftOS, but it wi
 if shell == nil then error("CCKernel2 must be run from the shell.") end
 if kernel ~= nil then error("CCKernel2 cannot be run inside itself.") end
 local myself = shell.getRunningProgram()
+fs.makeDir("/var")
+fs.makeDir("/var/logs")
 
 -- os.loadAPI paths
 local apipath = "/rom/apis:/usr/lib"
@@ -107,9 +109,10 @@ function os.loadAPI( _sPath )
 end
 
 os.loadAPI("CCOSCrypto")
-os.loadAPI("CCLog")
+_G.CCLog = dofile(apilookup("CCLog"))
 CCLog.default.consoleLogLevel = CCLog.logLevels.info
 local kernelLog = CCLog("CCKernel2")
+kernelLog:open()
 
 -- FS rewrite
 -- Permissions will be in a table with the key being the user ID and the value being a bitmask of the permissions allowed for that user.
@@ -657,13 +660,11 @@ end
 
 -- User system
 -- Passwords are stored in /etc/passwd as a LON file with the format {UID = {password = sha256(pass), name = "name"}, ...}
-kernelLog("Initializing user system", "users")
+kernelLog:debug("Initializing user system", "users")
 fs.makeDir("/usr")
 fs.makeDir("/usr/bin")
 fs.makeDir("/usr/share")
 fs.makeDir("/usr/lib")
-fs.makeDir("/var")
-fs.makeDir("/var/logs")
 fs.makeDir("/etc")
 fs.makeDir("/home")
 if not fs.exists("/etc/passwd") then

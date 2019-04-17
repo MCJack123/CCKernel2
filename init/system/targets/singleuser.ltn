@@ -1,0 +1,10 @@
+{
+    name = "singleuser",
+    description = "Single-User Boot",
+    prerun = {
+        "early"
+    },
+    requires = {
+        "singlelogin"
+    }
+}

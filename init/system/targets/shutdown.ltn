@@ -1,0 +1,5 @@
+{
+    name = "shutdown",
+    description = "Shut Down",
+    requirements = {},
+}

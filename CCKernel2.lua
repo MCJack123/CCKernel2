@@ -30,6 +30,13 @@ local myself = shell.getRunningProgram()
 fs.makeDir("/var")
 fs.makeDir("/var/logs")
 
+local argv = {...}
+local kernel_args = 0
+local kernel_arguments = {
+    single = 1
+}
+for k,v in pairs(argv) do if kernel_arguments[v] ~= nil then kernel_args = bit.bor(kernel_args, kernel_arguments[v]) end end
+
 -- os.loadAPI paths
 local apipath = "/rom/apis:/usr/lib"
 function os.APIPath() return apipath end
@@ -259,8 +266,9 @@ while i < 10 do
     i = i + 1
 end
 
+local singleUserMode = false
 _G._UID = 0
-function setuid(uid) if _G._UID ~= 0 or uid == -1 then return true else _G._UID = uid end end
+function setuid(uid) if _G._UID ~= 0 or uid < 0 or singleUserMode then return true else _G._UID = uid end end
 function getuid() return _G._UID end
 
 local function get_permissions(perms, uid)
@@ -270,8 +278,10 @@ local function get_permissions(perms, uid)
     else return default_permissions end
 end
 
-local function bmask(a, m) return bit.band(a, m) == m end
-local function has_permission(perms, uid, p) return bmask(get_permissions(perms, uid), p) end
+function bit.bmask(a, m) return bit.band(a, m) == m end
+local function has_permission(perms, uid, p) return bit.bmask(get_permissions(perms, uid), p) end
+
+singleUserMode = bit.bmask(kernel_args, kernel_arguments.single)
 
 function table.keys(t)
     local retval = {}
@@ -483,7 +493,7 @@ end
 
 function fs.list(path)
     local m, p = getMount(path)
-    if not bmask(m.getPermissions(p, getuid()), permissions.read) then error(path .. ": Access denied", 2) end
+    if not bit.bmask(m.getPermissions(p, getuid()), permissions.read) then error(path .. ": Access denied", 2) end
     local retval = m.list(p)
     for k,v in pairs(mounts) do if fs.getDir(k) == path then table.insert(retval, fs.getName(k)) end end
     return retval
@@ -501,7 +511,7 @@ end
 
 function fs.isReadOnly(path)
     local m, p = getMount(path)
-    return not bmask(m.getPermissions(p, getuid()), permissions.write)
+    return not bit.bmask(m.getPermissions(p, getuid()), permissions.write)
 end
 
 function fs.getPermissions(path, uid)
@@ -553,15 +563,15 @@ end
 function fs.makeDir(path)
     local m, p = getMount(path)
     if fs.getDir(p) ~= "/" and fs.getDir(p) ~= "" and not fs.isDir(fs.getDir(p)) then error(fs.getDir(p) .. ": Directory not found") end
-    if fs.getDir(p) ~= "/" and fs.getDir(p) ~= "" and not bmask(m.getPermissions(fs.getDir(p), getuid()), permissions.write) then error(path .. ": Access denied", 2) end
+    if fs.getDir(p) ~= "/" and fs.getDir(p) ~= "" and not bit.bmask(m.getPermissions(fs.getDir(p), getuid()), permissions.write) then error(path .. ": Access denied", 2) end
     m.makeDir(p)
     m.setPermissions(p, "*", fs.getPermissions(fs.getDir(path), "*"))
 end
 
 function fs.move(path, toPath)
     local m, p = getMount(path)
-    if not bmask(m.getPermissions(p, getuid()), permissions.delete) or not bmask(m.getPermissions(p, getuid()), permissions.read) then error(path .. ": Access denied", 2) end
-    if not bmask(fs.getPermissions(toPath, getuid()), permissions.write) then error(toPath .. ": Access denied", 2) end
+    if not bit.bmask(m.getPermissions(p, getuid()), permissions.delete) or not bit.bmask(m.getPermissions(p, getuid()), permissions.read) then error(path .. ": Access denied", 2) end
+    if not bit.bmask(fs.getPermissions(toPath, getuid()), permissions.write) then error(toPath .. ": Access denied", 2) end
     m.move(p, toPath)
     local inperms = textutils.unserializeFile(fs.getDir(path) .. "/.permissions")
     local outperms = textutils.unserializeFile(fs.getDir(toPath) .. "/.permissions")
@@ -573,8 +583,8 @@ end
 
 function fs.copy(path, toPath)
     local m, p = getMount(path)
-    if not bmask(m.getPermissions(p, getuid()), permissions.read) then error(path .. ": Access denied", 2) end
-    if not bmask(fs.getPermissions(toPath, getuid()), permissions.write) then error(toPath .. ": Access denied", 2) end
+    if not bit.bmask(m.getPermissions(p, getuid()), permissions.read) then error(path .. ": Access denied", 2) end
+    if not bit.bmask(fs.getPermissions(toPath, getuid()), permissions.write) then error(toPath .. ": Access denied", 2) end
     m.copy(p, toPath)
     local inperms = textutils.unserializeFile(fs.getDir(path) .. "/.permissions")
     local outperms = textutils.unserializeFile(fs.getDir(toPath) .. "/.permissions")
@@ -584,7 +594,7 @@ end
 
 function fs.delete(path)
     local m, p = getMount(path)
-    if not bmask(m.getPermissions(p, getuid()), permissions.delete) then error(path .. ": Access denied", 2) end
+    if not bit.bmask(m.getPermissions(p, getuid()), permissions.delete) then error(path .. ": Access denied", 2) end
     m.delete(p)
     local inperms = textutils.unserializeFile(fs.getDir(path) .. "/.permissions")
     inperms[fs.getName(path)] = nil
@@ -594,9 +604,9 @@ end
 function fs.open(path, mode)
     local m, p = getMount(path)
     if fs.getName(path) ~= ".permissions" then
-        if string.sub(mode, 1, 1) == "r" and not bmask(m.getPermissions(p, getuid()), permissions.read) then error(path .. ": Access denied", 2) end
-        if string.sub(mode, 1, 1) == "w" and not bmask(m.getPermissions(p, getuid()), permissions.write) then error(path .. ": Access denied", 2) end
-        if string.sub(mode, 1, 1) == "a" and not bmask(m.getPermissions(p, getuid()), permissions.write) then error(path .. ": Access denied", 2) end
+        if string.sub(mode, 1, 1) == "r" and not bit.bmask(m.getPermissions(p, getuid()), permissions.read) then error(path .. ": Access denied", 2) end
+        if string.sub(mode, 1, 1) == "w" and not bit.bmask(m.getPermissions(p, getuid()), permissions.write) then error(path .. ": Access denied", 2) end
+        if string.sub(mode, 1, 1) == "a" and not bit.bmask(m.getPermissions(p, getuid()), permissions.write) then error(path .. ": Access denied", 2) end
     end
     return m.open(p, mode)
 end
@@ -608,7 +618,7 @@ function fs.mount(path, mount)
     mounts[path] = mount
 end
 
-function fs.hasPermissions(path, uid, perm) return bmask(fs.getPermissions(path, uid), perm) end
+function fs.hasPermissions(path, uid, perm) return bit.bmask(fs.getPermissions(path, uid), perm) end
 function fs.mounts() return mounts end
 function fs.reset() fs = orig_fs end
 
@@ -685,7 +695,7 @@ if not fs.exists("/etc/passwd") then
         print("Sorry, try again.")
     end
     textutils.serializeFile("/etc/passwd", {
-        [-1] = {name = "superroot", fullName = "API Runtime User", password = nil},
+        [-1] = {name = "superroot", fullName = "Kernel Process", password = nil},
         [0] = {name = "root", fullName = "Superuser", password = nil},
         [1] = user
     })
@@ -831,11 +841,11 @@ function kernel.exec(path, env, ...)
     local _, pid = os.pullEvent("process_started")
     return pid
 end
-function kernel.fork(func, env, ...) 
+function kernel.fork(name, func, env, ...) 
     if type(env) == "table" then 
         pidenv[_G._PID] = env
-        os.queueEvent("kcall_fork_process", func, ...)
-    else os.queueEvent("kcall_fork_process", func, env, ...) end 
+        os.queueEvent("kcall_fork_process", name, func, ...)
+    else os.queueEvent("kcall_fork_process", name, func, env, ...) end 
     local _, pid = os.pullEvent("process_started")
     return pid
 end
@@ -846,6 +856,8 @@ function kernel.broadcast(ev, ...) kernel.send(0, ev, ...) end
 function kernel.getPID() return _G._PID end
 function kernel.chvt(id) os.queueEvent("kcall_change_vt", id) end
 function kernel.getvt() return currentVT end
+function kernel.getArgs() return kernel_args end
+kernel.arguments = kernel_arguments
 
 function kernel.getProcesses()
     os.queueEvent("kcall_get_process_table")
@@ -854,7 +866,7 @@ function kernel.getProcesses()
 end
 
 -- handlers is a table with the format {event_1 = function(...), event_2 = function(...), ...}
-function kernel.recieve(handlers)
+function kernel.receive(handlers)
     if type(handlers) ~= "table" then error("bad argument #1 (expected table, got " .. type(handlers) .. ")") end
     while true do
         local e = {os.pullEvent()}
@@ -921,6 +933,8 @@ end
 function os.queueEvent(ev, ...) nativeQueueEvent(ev, "CustomEvent,PID=" .. _G._PID, ...) end
 
 local firstProgram = shell.resolveProgram("login")
+local loginProgram = shell.resolveProgram("login")
+if singleUserMode then loginProgram = "/rom/programs/shell.lua" end
 
 fs.setPermissions(firstProgram, "*", bit.bor(fs.permissions.setuid, fs.permissions.read_execute))
 fs.setOwner(firstProgram, 0)
@@ -935,13 +949,13 @@ local orig_shell = shell
 kernel.log:info("Starting CCKernel2.")
 while kernel_running do
     if not vts[currentVT].started then 
-        table.insert(process_table, {coro=coroutine.create(nativeRun), path=shell.resolveProgram("login"), started=false, filter=nil, args={...}, signals={}, user=0, vt=currentVT, parent=0, loggedin=false, env=_ENV}) 
+        table.insert(process_table, {coro=coroutine.create(nativeRun), path=loginProgram, started=false, filter=nil, args={...}, signals={}, user=0, vt=currentVT, parent=0, loggedin=false, env=_ENV}) 
         vts[currentVT].started = true
     end
     local e = {os.pullEvent()}
     if process_table[1] == nil then
         --log:log("First process stopped, ending CCKernel")
-        print("Press any key to continue.")
+        print("Press enter to continue.")
         read()
         kernel_running = false
     end
@@ -953,7 +967,7 @@ while kernel_running do
             vts[num].setVisible(true)
             currentVT = num
             if not vts[num].started then 
-                table.insert(process_table, {coro=coroutine.create(nativeRun), path=shell.resolveProgram("login"), started=false, filter=nil, args={...}, signals={}, user=0, vt=num, loggedin=false, parent=0, env=_ENV}) 
+                table.insert(process_table, {coro=coroutine.create(nativeRun), path=loginProgram, started=false, filter=nil, args={...}, signals={}, user=0, vt=num, loggedin=false, parent=0, env=_ENV}) 
                 vts[num].started = true
             end
         elseif num == 12 then
@@ -1013,9 +1027,10 @@ while kernel_running do
         kernel.send(PID, "process_started", #process_table)
     elseif e[1] == "kcall_fork_process" then
         table.remove(e, 1)
+        local name = table.remove(e, 1) or "anonymous"
         local func = table.remove(e, 1)
         local env = pidenv[PID]
-        table.insert(process_table, {coro=coroutine.create(func), path="(function)", started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=true, parent=PID})
+        table.insert(process_table, {coro=coroutine.create(func), path="["..name.."]", started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=true, parent=PID})
         kernel.send(PID, "process_started", #process_table)
     elseif e[1] == "kcall_signal_handler" then
         process_table[PID].signals[e[1]] = e[2]

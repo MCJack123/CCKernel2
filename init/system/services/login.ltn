@@ -1,0 +1,5 @@
+{
+    name = "login",
+    description = "Multi-User Login",
+    exec = {"/usr/bin/login.lua"}
+}

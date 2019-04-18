@@ -674,6 +674,7 @@ kernelLog:debug("Initializing user system", "users")
 fs.makeDir("/usr")
 fs.makeDir("/usr/bin")
 fs.makeDir("/usr/share")
+fs.makeDir("/usr/share/help")
 fs.makeDir("/usr/lib")
 fs.makeDir("/etc")
 fs.makeDir("/home")
@@ -701,7 +702,7 @@ if not fs.exists("/etc/passwd") then
     })
 end
 shell.setPath(shell.path() .. ":/usr/bin")
-help.setPath(help.path() .. ":/usr/share")
+help.setPath(help.path() .. ":/usr/share/help")
 
 _G.users = {}
 
@@ -788,7 +789,8 @@ _ENV.error = function(message, level)
         printError("Error caught: ", message)
         nativeRun(_ENV, "/rom/programs/lua.lua")
     end
-    orig_error(message, level + 1)
+    if level ~= nil then level = level + 1 end
+    orig_error(message, level)
 end
 
 -- Virtual terminals
@@ -844,8 +846,8 @@ end
 function kernel.fork(name, func, env, ...) 
     if type(env) == "table" then 
         pidenv[_G._PID] = env
-        os.queueEvent("kcall_fork_process", name, func, ...)
-    else os.queueEvent("kcall_fork_process", name, func, env, ...) end 
+        os.queueEvent("kcall_fork_process", string.dump(func), name, ...)
+    else os.queueEvent("kcall_fork_process", string.dump(func), name, env, ...) end 
     local _, pid = os.pullEvent("process_started")
     return pid
 end
@@ -871,7 +873,7 @@ function kernel.receive(handlers)
     while true do
         local e = {os.pullEvent()}
         local ev = table.remove(e, 1)
-        for k,v in pairs(handlers) do if k == ev then v(table.unpack(e)) end end
+        for k,v in pairs(handlers) do if k == ev then if v(table.unpack(e)) then break end end end
     end
 end
 
@@ -932,7 +934,7 @@ end
 
 function os.queueEvent(ev, ...) nativeQueueEvent(ev, "CustomEvent,PID=" .. _G._PID, ...) end
 
-local firstProgram = shell.resolveProgram("login")
+local firstProgram = shell.resolveProgram("init")
 local loginProgram = shell.resolveProgram("login")
 if singleUserMode then loginProgram = "/rom/programs/shell.lua" end
 
@@ -1027,10 +1029,12 @@ while kernel_running do
         kernel.send(PID, "process_started", #process_table)
     elseif e[1] == "kcall_fork_process" then
         table.remove(e, 1)
-        local name = table.remove(e, 1) or "anonymous"
         local func = table.remove(e, 1)
+        local name = table.remove(e, 1) or "anonymous"
+        kernel.log:debug(name)
+        if func == nil then kernel.log:debug("Func is nil") end
         local env = pidenv[PID]
-        table.insert(process_table, {coro=coroutine.create(func), path="["..name.."]", started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=true, parent=PID})
+        table.insert(process_table, {coro=coroutine.create(loadstring(func)), path="["..name.."]", started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=true, parent=PID})
         kernel.send(PID, "process_started", #process_table)
     elseif e[1] == "kcall_signal_handler" then
         process_table[PID].signals[e[1]] = e[2]

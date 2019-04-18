@@ -1,5 +1,6 @@
 -- This file must be setuid + owner = 0
 term.clear()
+term.setCursorPos(1, 1)
 print(os.version() .. " tty" .. tostring(kernel.getvt()) .. "\n")
 if fs.setPermissions == nil then error("This requires CCKernel2.") end
 if users.getuid() ~= 0 then error("login must run as user 0") end
@@ -18,6 +19,7 @@ while true do
         os.queueEvent("kcall_login_changed", false)
         os.pullEvent("kcall_login_changed")
         term.clear()
+        term.setCursorPos(1, 1)
         return
     end
 end

@@ -1,5 +1,4 @@
 if kernel == nil then print("This requires CCKernel2.") end
-kernel.log:info("Welcome to CCKernel2!")
 
 function status(message, stat)
     if stat == nil then 
@@ -16,6 +15,8 @@ function status(message, stat)
     return stat
 end
 
+print("Welcome to CCKernel2!")
+
 if not fs.isDir("/etc/init") then error("CCInit is not installed properly, please reinstall.") end
 --[[
 * /etc/init/ stores initialization files
@@ -31,7 +32,7 @@ if not fs.isDir("/etc/init") then error("CCInit is not installed properly, pleas
     * services/ stores the services that the targets require
 ]] 
 
-function readService(service)
+local function readService(service)
     local path = nil
     if fs.exists("/etc/init/user/" .. service .. ".ltn") then path = "/etc/init/user/" .. service .. ".ltn"
     elseif fs.exists("/etc/init/system/services/" .. service .. ".ltn") then path = "/etc/init/system/services/" .. service .. ".ltn"
@@ -39,7 +40,7 @@ function readService(service)
     return textutils.unserializeFile(path)
 end
 
-local serviceDatabase = {}
+serviceDatabase = {}
 
 function startService(sname)
     if serviceDatabase[sname] ~= nil then return true end
@@ -78,7 +79,7 @@ function stopService(sname)
         end
     end end
     if service.stop ~= nil then os.run(_ENV, table.unpack(service.stop))
-    else kernel.kill(serviceDatabase[sname], signals.SIGTERM) end
+    else kernel.kill(serviceDatabase[sname], signal.SIGTERM) end
     serviceDatabase[sname] = nil
     if service.poststop ~= nil and #service.poststop > 0 then for k,v in ipairs(service.poststop) do 
         if not os.run(_ENV, table.unpack(v))  then
@@ -91,7 +92,7 @@ end
 
 function restartService(sname) return stopService(sname) and startService(sname) end
 
-function reachTarget(tname)
+local function reachTarget(tname)
     local target = textutils.unserializeFile("/etc/init/system/targets/" .. tname .. ".ltn")
     if target == nil then return status("Could not find target " .. sname .. ".", false) end
     if target.prerun ~= nil and #target.prerun > 0 then for k,v in ipairs(target.prerun) do
@@ -101,22 +102,6 @@ function reachTarget(tname)
         return status("Failed to reach target " .. target.description .. ".", false)
     end end
     return status("Reached target " .. target.description .. ".", true)
-end
-
-function initd()
-    kernel.receive({
-        service_start = startService,
-        service_stop = stopService,
-        service_restart = restartService,
-        service_status = function(sname, pid)
-            local retval
-            if serviceDatabase[sname] == nil then retval = false else
-                local ptable = kernel.getProcesses()
-                local p = ptable[serviceDatabase[sname]]
-                retval = p ~= nil and 
-            end
-        end
-    })
 end
 
 local nativeShutdown = os.shutdown
@@ -136,12 +121,21 @@ end
 
 local startTarget = bit.bmask(kernel.getArgs(), kernel.arguments.single) and "singleuser" or "multiuser"
 
-status("Starting CCInit daemon...")
-local initdPID = kernel.fork("initd", initd)
+if not reachTarget(startTarget) then return status("Could not start CCKernel2.", false) end
 
 _G.services = {}
-function services.start(sname) kernel.send(initdPID, "service_start", sname) end
-function services.stop(sname) kernel.send(initdPID, "service_stop", sname) end
-function services.restart(sname) kernel.send(initdPID, "service_restart", sname) end
+services.start = startService
+services.stop = stopService
+services.restart = restartService
+function services.pid(sname, pid) return serviceDatabase[sname] end
+function services.status(sname) if serviceDatabase[sname] == nil then return false else return kernel.getProcesses()[serviceDatabase[sname]] ~= nil end end
 
--- TODO
+os.sleep(3)
+shell.run(bit.bmask(kernel.getArgs(), kernel.arguments.single) and "shell" or "login")
+
+for k,v in pairs(serviceDatabase) do stopService(k) end
+os.shutdown = nativeShutdown
+os.reboot = nativeReboot
+_G.services = nil
+
+-- TODO: give services a fake term using a log instead of the real term

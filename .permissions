@@ -1,13 +1,19 @@
 {
-  [ ".git" ] = {
-    [ "*" ] = 15,
-  },
-  [ ".permissions" ] = {
-    [ "*" ] = 15,
-  },
   [ "login.lua" ] = {
     owner = 0,
     [ "*" ] = 25,
+  },
+  [ "lsperm.lua" ] = {
+    [ "*" ] = 15,
+  },
+  [ "CCOSCrypto.lua" ] = {
+    [ "*" ] = 15,
+  },
+  [ "tty.lua" ] = {
+    [ "*" ] = 15,
+  },
+  [ "whoami.lua" ] = {
+    [ "*" ] = 15,
   },
   [ "CCKernel2.lua" ] = {
     owner = 0,
@@ -16,20 +22,18 @@
   [ "ps.lua" ] = {
     [ "*" ] = 15,
   },
-  [ "lsperm.lua" ] = {
+  [ ".permissions" ] = {
     [ "*" ] = 15,
   },
-  [ "tty.lua" ] = {
-    [ "*" ] = 15,
+  [ "init.lua" ] = {
+    owner = 0,
+    [ "*" ] = 25,
   },
   [ "sudo.lua" ] = {
     owner = 0,
     [ "*" ] = 31,
   },
-  [ "whoami.lua" ] = {
-    [ "*" ] = 15,
-  },
-  [ "CCOSCrypto.lua" ] = {
+  [ ".git" ] = {
     [ "*" ] = 15,
   },
 }

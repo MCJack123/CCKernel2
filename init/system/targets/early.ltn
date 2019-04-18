@@ -1,5 +1,5 @@
 {
     name = "early",
     description = "Early Boot",
-    requirements = {}
+    requires = {}
 }

@@ -1,0 +1,5 @@
+{
+    name = "singlelogin",
+    description = "Single-User Shell",
+    exec = {"/rom/programs/shell.lua"}
+}

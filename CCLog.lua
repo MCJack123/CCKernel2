@@ -163,6 +163,52 @@ function CCLog.default:close()
     self.fileDescriptor = nil
 end
 
+function CCLog.createTerminal(log)
+    if log.open == nil or log.name == nil or log.info == nil then error("Log is not a valid CCLog!") end
+    log:open()
+    local retval = {}
+    retval.type = CCLog.logLevels.info
+    retval.cache = ""
+    function retval.save()
+        local text = retval.cache
+        if retval.type == CCLog.logLevels.debug then log:debug(text)
+        elseif retval.type == CCLog.logLevels.info then log:info(text)
+        elseif retval.type == CCLog.logLevels.warning then log:warn(text)
+        elseif retval.type == CCLog.logLevels.error then log:error(text)
+        elseif retval.type == CCLog.logLevels.critical then log:critical(text) end
+        retval.cache = ""
+    end
+    function retval.write(text)
+        if string.find(text, "\n") then
+            retval.cache = retval.cache .. string.sub(text, 1, string.find(text, "\n") - 1)
+            retval.save()
+            retval.write(string.sub(text, string.find(text, "\n") + 1))
+        else retval.cache = retval.cache .. text end
+    end
+    retval.blit = retval.write
+    function retval.clear() retval.cache = "" end
+    function retval.clearLine() retval.cache = "" end
+    function retval.getCursorPos() return 1, 1 end
+    function retval.setCursorPos(x, y) if y > 1 then retval.save() end end
+    function retval.setCursorBlink() end
+    function retval.isColor() return true end
+    function retval.getSize() return 1024, 1 end
+    function retval.scroll() retval.save() end
+    function retval.setTextColor(c)
+        if c == colors.gray or c == colors.lightGray then retval.type = CCLog.logLevels.debug
+        elseif c == colors.white or c == colors.black or c == colors.green or c == colors.lime then retval.type = CCLog.logLevels.info
+        elseif c == colors.yellow or c == colors.orange then retval.type = CCLog.logLevels.warning
+        elseif c == colors.red then retval.type = CCLog.logLevels.error
+        elseif c == colors.pink then retval.type = CCLog.logLevels.critical end
+    end
+    function retval.getTextColor() return CCLog.logColors[retval.type] end
+    function retval.setBackgroundColor() end
+    function retval.getBackgroundColor() return colors.black end
+    function retval.setPaletteColor() end
+    function retval.getPaletteColor() return 0, 0, 0 end
+    return retval
+end
+
 CCLog.default:open()
 
 setmetatable(CCLog, {__call = function(_, name)
@@ -280,6 +326,7 @@ setmetatable(CCLog, {__call = function(_, name)
         self.fileDescriptor.close()
         self.fileDescriptor = nil
     end
+    function retval:terminal() return CCLog.createTerminal(self) end
     return retval
 end})
 

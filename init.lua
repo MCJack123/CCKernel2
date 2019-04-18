@@ -57,6 +57,8 @@ function startService(sname)
         end
     end end
     serviceDatabase[sname] = kernel.exec(table.unpack(service.exec))
+    kernel.setProcessProperty(serviceDatabase[sname], "term", CCLog(sname):terminal())
+    kernel.setProcessProperty(serviceDatabase[sname], "loggedin", false)
     if service.poststart ~= nil and #service.poststart > 0 then for k,v in ipairs(service.poststart) do 
         if not os.run(_ENV, table.unpack(v)) then
             kernel.log:error("Failed to run poststart script " .. v[1] .. ".", "CCInit")
@@ -79,7 +81,10 @@ function stopService(sname)
         end
     end end
     if service.stop ~= nil then os.run(_ENV, table.unpack(service.stop))
-    else kernel.kill(serviceDatabase[sname], signal.SIGTERM) end
+    else 
+        kernel.kill(serviceDatabase[sname], signal.SIGTERM) 
+        os.pullEvent()
+    end
     serviceDatabase[sname] = nil
     if service.poststop ~= nil and #service.poststop > 0 then for k,v in ipairs(service.poststop) do 
         if not os.run(_ENV, table.unpack(v))  then
@@ -129,13 +134,23 @@ services.stop = stopService
 services.restart = restartService
 function services.pid(sname, pid) return serviceDatabase[sname] end
 function services.status(sname) if serviceDatabase[sname] == nil then return false else return kernel.getProcesses()[serviceDatabase[sname]] ~= nil end end
+services.running = true
 
-os.sleep(3)
-shell.run(bit.bmask(kernel.getArgs(), kernel.arguments.single) and "shell" or "login")
+os.sleep(2)
 
-for k,v in pairs(serviceDatabase) do stopService(k) end
+while services.running do
+    shell.run(bit.bmask(kernel.getArgs(), kernel.arguments.single) and "shell" or "login")
+    --kernel.setProcessProperty(_PID, "loggedin", false)
+    local ptab = kernel.getProcesses()
+    local loggedin = false
+    for k,v in pairs(ptab) do if v.loggedin and k ~= _PID then loggedin = true end end
+    if loggedin == false then break end
+end
+
+local stop = {}
+for k,v in pairs(serviceDatabase) do stop[k] = v end
+for k,v in pairs(stop) do stopService(k) end
 os.shutdown = nativeShutdown
 os.reboot = nativeReboot
 _G.services = nil
-
--- TODO: give services a fake term using a log instead of the real term
+os.queueEvent("kcall_login_changed", false)

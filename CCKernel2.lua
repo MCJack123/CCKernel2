@@ -664,7 +664,13 @@ function os.run( _tEnv, _sPath, ... )
     setmetatable( tEnv, { __index = _G } )
     local pid = kernel.exec( _sPath, tEnv, ... )
     local _, p, s = os.pullEvent("process_complete")
-    if p ~= pid then while p ~= pid do _, p, s = os.pullEvent("process_complete") end end
+    if p ~= pid then while p ~= pid do 
+        _, p, s = os.pullEvent("process_complete") 
+        if type(p) ~= "number" then 
+            kernel.log:traceback("Failed to run " .. _sPath .. ", PID " .. pid) 
+            error("Failed to run " .. _sPath .. ", PID " .. pid, 3)
+        end
+    end end
     return s
 end
 
@@ -806,6 +812,9 @@ end
 vts[currentVT].setVisible(true)
 vts[currentVT].started = true
 
+local nativeNative = term.native
+function term.native() return vts[currentVT] end
+
 -- Actual kernel runtime
 kernelLog:debug("Initializing kernel calls")
 _G.kernel = {}
@@ -859,6 +868,12 @@ function kernel.getPID() return _G._PID end
 function kernel.chvt(id) os.queueEvent("kcall_change_vt", id) end
 function kernel.getvt() return currentVT end
 function kernel.getArgs() return kernel_args end
+function kernel.setProcessProperty(pid, k, v)
+    if process_table[pid].parent == _PID or process_table[_PID].user == 0 and k ~= "parent" and k ~= "coro" and k ~= "started" then process_table[pid][k] = v end
+end
+function kernel.getProcessProperty(pid, k)
+    if process_table[pid].parent == _PID or process_table[_PID].user == 0 then return process_table[pid][k] end
+end
 kernel.arguments = kernel_arguments
 
 function kernel.getProcesses()
@@ -944,14 +959,29 @@ fs.setOwner(firstProgram, 0)
 local oldPath = shell.path()
 local kernel_running = true
 --if shell ~= nil then shell.setPath(oldPath .. ":/" .. CCKitGlobals.CCKitDir .. "/ktools") end
-table.insert(process_table, {coro=coroutine.create(nativeRun), path=firstProgram, started=false, filter=nil, args={...}, signals={}, user=0, vt=1, loggedin=true, env=_ENV})
+table.insert(process_table, {coro=coroutine.create(nativeRun), path=firstProgram, started=false, filter=nil, args={...}, signals={}, user=0, vt=1, loggedin=true, env=_ENV, term=vts[1], main=true})
 term.clear()
 term.setCursorPos(1, 1)
 local orig_shell = shell
 kernel.log:info("Starting CCKernel2.")
+local function killProcess(pid)
+    local oldparent = process_table[pid].parent
+    process_table[pid] = nil
+    kernel.send(oldparent, "process_complete", pid, false)
+    local restart = true
+    while restart do
+        restart = false
+        for k,v in pairs(process_table) do if v.parent == pid then 
+            killProcess(k) 
+            restart = true
+            break
+        end end
+    end
+end
 while kernel_running do
     if not vts[currentVT].started then 
-        table.insert(process_table, {coro=coroutine.create(nativeRun), path=loginProgram, started=false, filter=nil, args={...}, signals={}, user=0, vt=currentVT, parent=0, loggedin=false, env=_ENV}) 
+        local pid = table.maxn(process_table) + 1
+        table.insert(process_table, pid, {coro=coroutine.create(nativeRun), path=loginProgram, started=false, filter=nil, args={...}, signals={}, user=0, vt=currentVT, parent=0, loggedin=false, env=_ENV, term=vts[currentVT], main=true}) 
         vts[currentVT].started = true
     end
     local e = {os.pullEvent()}
@@ -960,6 +990,7 @@ while kernel_running do
         print("Press enter to continue.")
         read()
         kernel_running = false
+        e = {"kernel_stop"}
     end
     if e[1] == "key" and keys.getName(e[2]) ~= nil and string.find(keys.getName(e[2]), "f%d+") == 1 then
         local num = tonumber(string.sub(keys.getName(e[2]), 2))
@@ -969,7 +1000,8 @@ while kernel_running do
             vts[num].setVisible(true)
             currentVT = num
             if not vts[num].started then 
-                table.insert(process_table, {coro=coroutine.create(nativeRun), path=loginProgram, started=false, filter=nil, args={...}, signals={}, user=0, vt=num, loggedin=false, parent=0, env=_ENV}) 
+                local pid = table.maxn(process_table) + 1
+                table.insert(process_table, pid, {coro=coroutine.create(nativeRun), path=loginProgram, started=false, filter=nil, args={...}, signals={}, user=0, vt=num, loggedin=false, parent=0, env=_ENV, term=vts[num], main=true}) 
                 vts[num].started = true
             end
         elseif num == 12 then
@@ -992,7 +1024,7 @@ while kernel_running do
     end
     if e[1] == "kcall_get_process_table" then
         e[2] = deepcopy(process_table)
-        e[2][0] = {coro=nil, path=myself, started=true, filter=nil, stopped=false, args={}, signals={}, user=0, vt=0, loggedin=true, parent=0}
+        e[2][0] = {coro=nil, path=myself, started=true, filter=nil, stopped=false, args={}, signals={}, user=0, vt=0, loggedin=false, parent=0, term=nativeNative(), main=true}
     elseif e[1] == "kcall_login_changed" and process_table[PID].user == 0 then
         process_table[PID].loggedin = e[2]
         if not e[2] then vts[process_table[PID].vt].started = false end
@@ -1002,7 +1034,7 @@ while kernel_running do
         local pid = e[2]
         if process_table[pid] ~= nil then
             if sig == signal.SIGKILL and process_table[PID].user == 0 then
-                kernel.send(table.remove(process_table, pid).parent, "process_complete", pid, false)
+                killProcess(pid)
                 local c = term.getTextColor()
                 term.setTextColor(colors.red)
                 print("Killed")
@@ -1010,32 +1042,34 @@ while kernel_running do
             elseif sig == signal.SIGINT then
                 local continue = true
                 if process_table[pid].signals[signal.SIGINT] ~= nil then continue = process_table[pid].signals[signal.SIGINT](signal.SIGINT) end
-                if continue then kernel.send(table.remove(process_table, pid).parent, "process_complete", pid, false) end
+                if continue then killProcess(pid) end
             elseif sig == signal.SIGSTOP then
                 process_table[pid].stopped = true
             elseif sig == signal.SIGCONT then
                 process_table[pid].stopped = false
             elseif (sig == signal.SIGBUS or sig == signal.SIGFPE or sig == signal.SIGILL or sig == signal.SIGIO or sig == signal.SIGPIPE or sig == signal.SIGSEGV or sig == signal.SIGTERM or sig == signal.SIGTRAP) and process_table[PID].user == 0 then
                 if process_table[pid].signals[sig] ~= nil then process_table[pid].signals[sig](sig) end
-                kernel.send(table.remove(process_table, pid).parent, "process_complete", pid, false)
+                killProcess(pid)
             elseif process_table[pid].signals[sig] ~= nil then process_table[pid].signals[sig](sig) end
         end
     elseif e[1] == "kcall_start_process" then
         table.remove(e, 1)
         local path = table.remove(e, 1)
         local env = pidenv[PID]
-        table.insert(process_table, {coro=coroutine.create(nativeRun), path=path, started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=true, parent=PID})
+        local pid = table.maxn(process_table) + 1
+        table.insert(process_table, pid, {coro=coroutine.create(nativeRun), path=path, started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=process_table[PID].loggedin, parent=PID, term=vts[process_table[PID].vt], main=false})
         pidenv[PID] = nil
-        kernel.send(PID, "process_started", #process_table)
+        kernel.send(PID, "process_started", pid)
     elseif e[1] == "kcall_fork_process" then
         table.remove(e, 1)
         local func = table.remove(e, 1)
         local name = table.remove(e, 1) or "anonymous"
+        local pid = table.maxn(process_table) + 1
         kernel.log:debug(name)
         if func == nil then kernel.log:debug("Func is nil") end
         local env = pidenv[PID]
-        table.insert(process_table, {coro=coroutine.create(loadstring(func)), path="["..name.."]", started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=true, parent=PID})
-        kernel.send(PID, "process_started", #process_table)
+        table.insert(process_table, pid, {coro=coroutine.create(loadstring(func)), path="["..name.."]", started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=process_table[PID].loggedin, parent=PID, term=vts[process_table[PID].vt], main=false})
+        kernel.send(PID, "process_started", pid)
     elseif e[1] == "kcall_signal_handler" then
         process_table[PID].signals[e[1]] = e[2]
     elseif e[1] == "kcall_change_vt" then
@@ -1063,9 +1097,10 @@ while kernel_running do
                         _G._UID = v.user
                         --if v.env ~= nil then for r,n in pairs(v.env) do _G[r] = n end end
                         --shell = nil
-                        term.redirect(vts[v.vt])
+                        term.redirect(v.term)
                         err, res = coroutine.resume(v.coro, unpack(e))
-                        term.redirect(term.native())
+                        v.term = term.current()
+                        term.redirect(nativeNative())
                         --shell = orig_shell
                         --if v.env ~= nil then for r,n in pairs(v.env) do _G[r] = nil end end
                         v.user = _G._UID
@@ -1082,10 +1117,11 @@ while kernel_running do
                         print(v.vt)
                         os.sleep(5)
                     end
-                    term.redirect(vts[v.vt])
+                    term.redirect(v.term)
                     if v.env == nil then v.env = {} end
                     err, res = coroutine.resume(v.coro, v.env, v.path, unpack(v.args))
-                    term.redirect(term.native())
+                    v.term = term.current()
+                    term.redirect(nativeNative())
                     --_ENV.shell = orig_shell
                     --shell = orig_shell
                     --if v.env ~= nil then for r,n in pairs(v.env) do _G[r] = nil end end
@@ -1097,8 +1133,11 @@ while kernel_running do
                 elseif res ~= nil then v.filter = res else v.filter = nil end -- assuming every yield is for pullEvent, this may be unsafe 
             end
         end
-        for k,v in pairs(delete) do kernel.send(table.remove(process_table, v.f).parent, "process_complete", v.f, v.s, v.r) end
-        if not loggedin then break end
+        for k,v in pairs(delete) do 
+            if process_table[v.f].main then vts[process_table[v.f].vt].started = false end
+            killProcess(v.f)
+        end
+        --if not loggedin then break end
     end
 end
 term.setBackgroundColor(colors.black)
@@ -1107,6 +1146,7 @@ term.clear()
 term.setCursorPos(1, 1)
 os.run = nativeRun
 os.queueEvent = nativeQueueEvent
+term.native = nativeNative
 error = orig_error
 
 _G.fs = orig_fs

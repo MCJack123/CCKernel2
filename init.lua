@@ -83,7 +83,7 @@ function stopService(sname)
     if service.stop ~= nil then os.run(_ENV, table.unpack(service.stop))
     else 
         kernel.kill(serviceDatabase[sname], signal.SIGTERM) 
-        os.pullEvent()
+        --os.pullEvent()
     end
     serviceDatabase[sname] = nil
     if service.poststop ~= nil and #service.poststop > 0 then for k,v in ipairs(service.poststop) do 
@@ -114,13 +114,17 @@ local nativeReboot = os.reboot
 
 function os.shutdown()
     reachTarget("shutdown")
-    for k,v in pairs(serviceDatabase) do stopService(k) end
+    local stop = {}
+    for k,v in pairs(serviceDatabase) do stop[k] = v end
+    for k,v in pairs(stop) do stopService(k) end
     nativeShutdown()
 end
 
 function os.reboot()
     reachTarget("reboot")
-    for k,v in pairs(serviceDatabase) do stopService(k) end
+    local stop = {}
+    for k,v in pairs(serviceDatabase) do stop[k] = v end
+    for k,v in pairs(stop) do stopService(k) end
     nativeReboot()
 end
 
@@ -153,4 +157,4 @@ for k,v in pairs(stop) do stopService(k) end
 os.shutdown = nativeShutdown
 os.reboot = nativeReboot
 _G.services = nil
-os.queueEvent("kcall_login_changed", false)
+kernel.setProcessProperty(_PID, "loggedin", false)

@@ -3,7 +3,7 @@
     owner = 0,
     [ "*" ] = 31,
   },
-  [ "lsperm.lua" ] = {
+  [ "whoami.lua" ] = {
     [ "*" ] = 15,
   },
   [ "redirtest.lua" ] = {
@@ -39,7 +39,7 @@
   [ "tty.lua" ] = {
     [ "*" ] = 15,
   },
-  [ "whoami.lua" ] = {
+  [ "lsperm.lua" ] = {
     [ "*" ] = 15,
   },
 }

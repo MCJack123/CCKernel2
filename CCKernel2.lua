@@ -947,6 +947,113 @@ local function wrappedRun( _tEnv, _sPath, ... )
     return false
 end
 
+-- I/O piping
+function createPipeTerminal()
+    local retval = {}
+    retval.screen = {}
+    retval.width, retval.height = term.getSize()
+    local x = 1
+    while x <= retval.width do
+        retval.screen[x] = 
+        local y = 1
+        while y <= retval.height do
+    function retval.save()
+        local text = retval.cache
+        if retval.type == CCLog.logLevels.debug then log:debug(text)
+        elseif retval.type == CCLog.logLevels.info then log:info(text)
+        elseif retval.type == CCLog.logLevels.warning then log:warn(text)
+        elseif retval.type == CCLog.logLevels.error then log:error(text)
+        elseif retval.type == CCLog.logLevels.critical then log:critical(text) end
+        retval.cache = ""
+    end
+    function retval.write(text)
+        if string.find(text, "\n") then
+            retval.cache = retval.cache .. string.sub(text, 1, string.find(text, "\n") - 1)
+            retval.save()
+            retval.write(string.sub(text, string.find(text, "\n") + 1))
+        else retval.cache = retval.cache .. text end
+    end
+    retval.blit = retval.write
+    function retval.clear() retval.cache = "" end
+    function retval.clearLine() retval.cache = "" end
+    function retval.getCursorPos() return 1, 1 end
+    function retval.setCursorPos(x, y) if y > 1 then retval.save() end end
+    function retval.setCursorBlink() end
+    function retval.isColor() return true end
+    function retval.getSize() return 1024, 1 end
+    function retval.scroll() retval.save() end
+    function retval.setTextColor(c)
+        if c == colors.gray or c == colors.lightGray then retval.type = CCLog.logLevels.debug
+        elseif c == colors.white or c == colors.black or c == colors.green or c == colors.lime then retval.type = CCLog.logLevels.info
+        elseif c == colors.yellow or c == colors.orange then retval.type = CCLog.logLevels.warning
+        elseif c == colors.red then retval.type = CCLog.logLevels.error
+        elseif c == colors.pink then retval.type = CCLog.logLevels.critical end
+    end
+    function retval.getTextColor() return CCLog.logColors[retval.type] end
+    function retval.setBackgroundColor() end
+    function retval.getBackgroundColor() return colors.black end
+    function retval.setPaletteColor() end
+    function retval.getPaletteColor() return 0, 0, 0 end
+    return retval
+end
+
+local pipes = {}
+function kernel.popen(path, mode, ...)
+    local retval = {}
+    local PID = kernel.exec(path, ...)
+    pipes[PID] = {}
+    function retval.close()
+        kernel.kill(PID, signal.SIGINT)
+        pipes[PID] = nil
+    end
+    function retval.pid() return PID end
+    if string.find(mode, "r") ~= nil then
+        pipes[PID].read = ""
+        retval.readLine = function()
+            local len = string.find(pipes[PID].read, "\n")
+            if len == nil then
+                local retval = pipes[PID].read
+                pipes[PID].read = ""
+                return retval
+            else
+                local retval = string.sub(pipes[PID].read, 1, len)
+                pipes[PID].read = string.sub(pipes[PID].read, len)
+                return retval
+            end
+        end
+        retval.readAll = function()
+            local retval = pipes[PID].read
+            pipes[PID].read = ""
+            return retval
+        end
+    elseif string.find(mode, "w") ~= nil then
+        pipes[PID].write = ""
+        retval.write = function(d) 
+            pipes[PID].write = pipes[PID].write .. d 
+        end
+        retval.writeLine = function(d) 
+            pipes[PID].write = pipes[PID].write .. d .. "\n" 
+        end
+    end
+    return retval
+end
+
+local orig_read = read
+function _G.read(...)
+    if pipes[_PID] == nil or pipes[_PID].write == nil then return orig_read(...) else
+        local len = string.find(pipes[PID].write, "\n")
+        if len == nil then
+            local retval = pipes[PID].write
+            pipes[PID].write = ""
+            return retval
+        else
+            local retval = string.sub(pipes[PID].write, 1, len)
+            pipes[PID].write = string.sub(pipes[PID].write, len)
+            return retval
+        end
+    end
+end
+
 function os.queueEvent(ev, ...) nativeQueueEvent(ev, "CustomEvent,PID=" .. _G._PID, ...) end
 
 local firstProgram = shell.resolveProgram("init")
@@ -1147,10 +1254,12 @@ term.setCursorPos(1, 1)
 os.run = nativeRun
 os.queueEvent = nativeQueueEvent
 term.native = nativeNative
+term.write = nativeWrite
 error = orig_error
 
 _G.fs = orig_fs
 _G.loadfile = orig_loadfile
+_G.read = orig_read
 _G._PID = nil
 _G._UID = nil
 _G.kernel = nil

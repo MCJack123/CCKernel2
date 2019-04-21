@@ -19,7 +19,7 @@ Features: multiprocessing, IPC, permissions, signaling, virtual terminals, file 
   * Actually, if the coroutine environment is not copied on execution, it may be possible to examine the environment outside of the program. Catching errors outside and resuming will not be possible, but stepping through to each os.pullEvent() may be possible.
 * [check] For multiple users, we need to implement a custom runtime for each coroutine. (We'll figure this out as we go.)
 * [check] For filesystem reorganization, we just need to remap the files in /rom to /bin, /lib, /share, /etc, etc. inside the fs API. /rom will still be accessible.
-* For I/O operations, we need to rewrite term.write() and read() to use piped data first, then use the normal I/O data. Each process will need to be aware of where it's being piped to.
+* [check] For I/O operations, we need to rewrite term.write() and read() to use piped data first, then use the normal I/O data. Each process will need to be aware of where it's being piped to.
 
 This will be quite complicated and will fundamentally reshape CraftOS, but it will give so many new features to CraftOS at its base. I'm hoping to keep this as compatible with base CraftOS as possible, retaining support for all (most) programs. 
 ]]--
@@ -802,18 +802,44 @@ end
 -- Virtual terminals
 local vts = {}
 local currentVT = 1
+local thisVT = 1
 i = 1
 while i < 9 do
     local w, h = term.getSize()
     vts[i] = window.create(term.native(), 1, 1, w, h, false)
     vts[i].started = false
+    if term.setGraphicsMode ~= nil then
+        vts[i].graphicsMode = false
+        vts[i].pixels = {}
+        local w, h = term.getSize()
+        for x = 0, w * 6 - 1 do 
+            vts[i].pixels[x] = {}
+            for y = 0, h * 9 - 1 do vts[i].pixels[x][y] = colors.black end
+        end
+    end
     i = i + 1
 end
 vts[currentVT].setVisible(true)
 vts[currentVT].started = true
 
 local nativeNative = term.native
-function term.native() return vts[currentVT] end
+local nativeSetGraphics = term.setGraphicsMode
+local nativeGetGraphics = term.getGraphicsMode
+local nativeSetPixel = term.setPixel
+local nativeGetPixel = term.getPixel
+function term.native() return vts[thisVT] end
+if term.setGraphicsMode ~= nil then
+    function term.setGraphicsMode(mode)
+        vts[thisVT].graphicsMode = mode
+        if thisVT == currentVT then nativeSetGraphics(mode) end
+    end
+    function term.setPixel(x, y, color)
+        vts[thisVT].pixels[x][y] = color
+        if thisVT == currentVT then nativeSetPixel(x, y, color) end
+    end
+    function term.getGraphicsMode() return vts[thisVT].graphicsMode end
+    function term.getPixel(x, y) return vts[thisVT].pixels[x][y] end
+end
 
 -- Actual kernel runtime
 kernelLog:debug("Initializing kernel calls")
@@ -1216,6 +1242,11 @@ while kernel_running do
             vts[currentVT].setVisible(false)
             term.clear()
             vts[e[2]].setVisible(true)
+            if term.setGraphicsMode ~= nil then
+                nativeSetGraphics(vts[e[2]].graphicsMode)
+                local w, h = term.getSize()
+                for x = 0, w * 6 - 1 do for y = 0, h * 9 - 1 do nativeSetPixel(x, y, vts[e[2]].pixels[x][y]) end end
+            end
             currentVT = e[2]
         end
     else
@@ -1236,6 +1267,7 @@ while kernel_running do
                         _G._UID = v.user
                         --if v.env ~= nil then for r,n in pairs(v.env) do _G[r] = n end end
                         --shell = nil
+                        thisVT = v.vt
                         term.redirect(v.term)
                         err, res = coroutine.resume(v.coro, unpack(e))
                         v.term = term.current()
@@ -1256,6 +1288,7 @@ while kernel_running do
                         print(v.vt)
                         os.sleep(5)
                     end
+                    thisVT = v.vt
                     term.redirect(v.term)
                     if v.env == nil then v.env = {} end
                     err, res = coroutine.resume(v.coro, v.env, v.path, unpack(v.args))
@@ -1286,6 +1319,10 @@ term.setCursorPos(1, 1)
 os.run = nativeRun
 os.queueEvent = nativeQueueEvent
 term.native = nativeNative
+term.setGraphicsMode = nativeSetGraphics
+term.getGraphicsMode = nativeGetGraphics
+term.setPixel = nativeSetPixel
+term.getPixel = nativeGetPixel
 error = orig_error
 
 _G.fs = orig_fs

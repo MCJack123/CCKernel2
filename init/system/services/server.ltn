@@ -1,0 +1,5 @@
+{
+    name = "server",
+    description = "HTTP Server",
+    exec = {"/usr/bin/server.lua", "80"}
+}

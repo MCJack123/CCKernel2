@@ -14,8 +14,8 @@ A custom shell/kernel environment for ComputerCraft.
 * `os.loadAPI` resolution paths
 * Process I/O pipes
 * systemd-based init program
-* CraftOS-PC graphics mode support in virtual terminals
 ## Future Features
+* CraftOS-PC graphics mode support in virtual terminals (WIP)
 * Updated shell with built-in Lua calling
 * Setup program
 ## Usage

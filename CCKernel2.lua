@@ -1,6 +1,6 @@
 --[[ 
 CCKernel 2
-Features: multiprocessing, IPC, permissions, signaling, virtual terminals, file descriptors, debugging, multiple users, filesystem reorganization, I/O operations
+Features: multiprocessing, IPC, permissions, signaling, virtual terminals, device files, debugging, multiple users, filesystem reorganization, I/O operations
 
 * [check] For multiprocessing, we need a run loop that executes coroutines in a table one by one.
 * [check] For IPC, we need to pull events sent from each coroutine into the run loop. Then we need to check the PID, name, etc. and resend the events into the parallel coroutines.
@@ -8,7 +8,7 @@ Features: multiprocessing, IPC, permissions, signaling, virtual terminals, file 
 * [check] For signaling, we need IPC + checking the events sent for specific signals. If the name matches, then we either a) do what the signal means (SIGKILL, SIGTERM, SIGSTOP, etc.), or b) relay the signal into the program.
 * [check] For virtual terminals, we need to have multiple copies of the term API that can be switched as needed.
   * These copies are implemented as windows that are set visible or invisible depending on the VT currently being used.
-* [check] For file descriptors, we need to catch opening these files in the fs API, and return the respective file handle for the file descriptor. Possible descriptors:
+* [check] For device files, we need to catch opening these files in the fs API, and return the respective file handle for the device file. Possible devices:
   * /dev/random: file.read() returns math.random(0, 255)
   * /dev/zero: file.read() returns 0
   * /dev/null: file.write() does nothing
@@ -1039,7 +1039,7 @@ end
 local function trim11(s)
     local n = s:find"%S"
     return n and s:match(".*%S", n) or ""
- end
+end
 
 pipes = {}
 pipefd = {}
@@ -1051,6 +1051,8 @@ function kernel.popen(path, mode, env, ...)
     local _, pid = os.pullEvent("process_started")
     return pipefd[pid]
 end
+
+function fs.pipe()
 
 local orig_read = read
 function _G.read(...)

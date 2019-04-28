@@ -29,6 +29,8 @@ if kernel ~= nil then error("CCKernel2 cannot be run inside itself.") end
 local myself = shell.getRunningProgram()
 fs.makeDir("/var")
 fs.makeDir("/var/logs")
+term.clear()
+term.setCursorPos(1, 1)
 
 local argv = {...}
 local kernel_args = 0
@@ -87,6 +89,7 @@ function os.loadAPI( _sPath )
     tAPIsLoading[sName] = true
 
     local tEnv = {}
+    local tAPI = nil
     setmetatable( tEnv, { __index = _G } )
     local fnAPI, err = loadfile( _sPath, tEnv )
     if fnAPI then
@@ -96,6 +99,8 @@ function os.loadAPI( _sPath )
             printError( err )
             tAPIsLoading[sName] = nil
             return false
+        elseif err ~= nil then
+            tAPI = err
         end
     else
         printError( err )
@@ -103,10 +108,12 @@ function os.loadAPI( _sPath )
         return false
     end
     
-    local tAPI = {}
-    for k,v in pairs( tEnv ) do
-        if k ~= "_ENV" then
-            tAPI[k] =  v
+    if tAPI == nil then
+        tAPI = {}
+        for k,v in pairs( tEnv ) do
+            if k ~= "_ENV" then
+                tAPI[k] =  v
+            end
         end
     end
 
@@ -117,9 +124,55 @@ end
 
 os.loadAPI("CCOSCrypto")
 _G.CCLog = dofile(apilookup("CCLog"))
+CCLog.default.logToConsole = true
 CCLog.default.consoleLogLevel = CCLog.logLevels.info
 local kernelLog = CCLog("CCKernel2")
 kernelLog:open()
+kernelLog.showInDefaultLog = true
+
+-- Virtual terminals
+local vts = {}
+local currentVT = 1
+local thisVT = 1
+i = 1
+while i < 9 do
+    local w, h = term.getSize()
+    vts[i] = window.create(term.native(), 1, 1, w, h, false)
+    vts[i].started = false
+    if term.setGraphicsMode ~= nil then
+        vts[i].graphicsMode = false
+        vts[i].pixels = {}
+        local w, h = term.getSize()
+        for x = 0, w * 6 - 1 do 
+            vts[i].pixels[x] = {}
+            for y = 0, h * 9 - 1 do vts[i].pixels[x][y] = colors.black end
+        end
+    end
+    i = i + 1
+end
+vts[currentVT].setVisible(true)
+vts[currentVT].started = true
+
+local nativeNative = term.native
+local nativeSetGraphics = term.setGraphicsMode
+local nativeGetGraphics = term.getGraphicsMode
+local nativeSetPixel = term.setPixel
+local nativeGetPixel = term.getPixel
+function term.native() return vts[thisVT] end
+if term.setGraphicsMode ~= nil then
+    function term.setGraphicsMode(mode)
+        vts[thisVT].graphicsMode = mode
+        if thisVT == currentVT then nativeSetGraphics(mode) end
+    end
+    function term.setPixel(x, y, color)
+        vts[thisVT].pixels[x][y] = color
+        if thisVT == currentVT then nativeSetPixel(x, y, color) end
+    end
+    function term.getGraphicsMode() return vts[thisVT].graphicsMode end
+    function term.getPixel(x, y) return vts[thisVT].pixels[x][y] end
+end
+
+CCLog.default.term = vts[1]
 
 -- FS rewrite
 -- Permissions will be in a table with the key being the user ID and the value being a bitmask of the permissions allowed for that user.
@@ -146,7 +199,7 @@ local permissions = {
 -- Config setting: Default permissions for users without an entry
 local default_permissions = permissions.full
 
-kernelLog:debug("Initializing device files", "fs")
+kernelLog:info("initializing device files")
 local deviceFiles = {
 	random = {
         rb = {
@@ -304,7 +357,7 @@ function textutils.serializeFile(path, tab)
     file.close()
 end
 
-kernelLog:debug("Initializing filesystem", "fs")
+kernelLog:info("initializing filesystem")
 local orig_fs = fs
 _G.fs = {}
 
@@ -676,7 +729,7 @@ end
 
 -- User system
 -- Passwords are stored in /etc/passwd as a LON file with the format {UID = {password = sha256(pass), name = "name"}, ...}
-kernelLog:debug("Initializing user system", "users")
+kernelLog:info("initializing user system")
 fs.makeDir("/usr")
 fs.makeDir("/usr/bin")
 fs.makeDir("/usr/share")
@@ -799,50 +852,357 @@ _ENV.error = function(message, level)
     orig_error(message, level)
 end
 
--- Virtual terminals
-local vts = {}
-local currentVT = 1
-local thisVT = 1
-i = 1
-while i < 9 do
-    local w, h = term.getSize()
-    vts[i] = window.create(term.native(), 1, 1, w, h, false)
-    vts[i].started = false
-    if term.setGraphicsMode ~= nil then
-        vts[i].graphicsMode = false
-        vts[i].pixels = {}
-        local w, h = term.getSize()
-        for x = 0, w * 6 - 1 do 
-            vts[i].pixels[x] = {}
-            for y = 0, h * 9 - 1 do vts[i].pixels[x][y] = colors.black end
+-- **Cool** read function (allows linux-style password entry)
+function _G.read( _sReplaceChar, _tHistory, _fnComplete, _sDefault )
+    if _sReplaceChar ~= nil and type( _sReplaceChar ) ~= "string" then
+        error( "bad argument #1 (expected string, got " .. type( _sReplaceChar ) .. ")", 2 ) 
+    end
+    if _tHistory ~= nil and type( _tHistory ) ~= "table" then
+        error( "bad argument #2 (expected table, got " .. type( _tHistory ) .. ")", 2 ) 
+    end
+    if _fnComplete ~= nil and type( _fnComplete ) ~= "function" then
+        error( "bad argument #3 (expected function, got " .. type( _fnComplete ) .. ")", 2 ) 
+    end
+    if _sDefault ~= nil and type( _sDefault ) ~= "string" then
+        error( "bad argument #4 (expected string, got " .. type( _sDefault ) .. ")", 2 ) 
+    end
+    term.setCursorBlink( true )
+
+    local sLine
+    if type( _sDefault ) == "string" then
+        sLine = _sDefault
+    else
+        sLine = ""
+    end
+    local nHistoryPos
+    local nPos = #sLine
+    if _sReplaceChar then
+        _sReplaceChar = string.sub( _sReplaceChar, 1, 1 )
+    end
+
+    local tCompletions
+    local nCompletion
+    local function recomplete()
+        if _fnComplete and nPos == string.len(sLine) then
+            tCompletions = _fnComplete( sLine )
+            if tCompletions and #tCompletions > 0 then
+                nCompletion = 1
+            else
+                nCompletion = nil
+            end
+        else
+            tCompletions = nil
+            nCompletion = nil
         end
     end
-    i = i + 1
-end
-vts[currentVT].setVisible(true)
-vts[currentVT].started = true
 
-local nativeNative = term.native
-local nativeSetGraphics = term.setGraphicsMode
-local nativeGetGraphics = term.getGraphicsMode
-local nativeSetPixel = term.setPixel
-local nativeGetPixel = term.getPixel
-function term.native() return vts[thisVT] end
-if term.setGraphicsMode ~= nil then
-    function term.setGraphicsMode(mode)
-        vts[thisVT].graphicsMode = mode
-        if thisVT == currentVT then nativeSetGraphics(mode) end
+    local function uncomplete()
+        tCompletions = nil
+        nCompletion = nil
     end
-    function term.setPixel(x, y, color)
-        vts[thisVT].pixels[x][y] = color
-        if thisVT == currentVT then nativeSetPixel(x, y, color) end
+
+    local w = term.getSize()
+    local sx = term.getCursorPos()
+
+    local function redraw( _bClear )
+        local nScroll = 0
+        if sx + nPos >= w then
+            nScroll = (sx + nPos) - w
+        end
+
+        local cx,cy = term.getCursorPos()
+        term.setCursorPos( sx, cy )
+        local sReplace = (_bClear and " ") or _sReplaceChar
+        if sReplace ~= "" then
+            if sReplace then
+                term.write( string.rep( sReplace, math.max( string.len(sLine) - nScroll, 0 ) ) )
+            else
+                term.write( string.sub( sLine, nScroll + 1 ) )
+            end
+        end
+        if nCompletion then
+            local sCompletion = tCompletions[ nCompletion ]
+            local oldText, oldBg
+            if not _bClear then
+                oldText = term.getTextColor()
+                oldBg = term.getBackgroundColor()
+                term.setTextColor( colors.white )
+                term.setBackgroundColor( colors.gray )
+            end
+            if sReplace then
+                term.write( string.rep( sReplace, string.len( sCompletion ) ) )
+            else
+                term.write( sCompletion )
+            end
+            if not _bClear then
+                term.setTextColor( oldText )
+                term.setBackgroundColor( oldBg )
+            end
+        end
+
+        if sReplace ~= "" then term.setCursorPos( sx + nPos - nScroll, cy ) end
     end
-    function term.getGraphicsMode() return vts[thisVT].graphicsMode end
-    function term.getPixel(x, y) return vts[thisVT].pixels[x][y] end
+    
+    local function clear()
+        redraw( true )
+    end
+
+    recomplete()
+    redraw()
+
+    local function acceptCompletion()
+        if nCompletion then
+            -- Clear
+            clear()
+
+            -- Find the common prefix of all the other suggestions which start with the same letter as the current one
+            local sCompletion = tCompletions[ nCompletion ]
+            sLine = sLine .. sCompletion
+            nPos = string.len( sLine )
+
+            -- Redraw
+            recomplete()
+            redraw()
+        end
+    end
+    while true do
+        local sEvent, param = os.pullEvent()
+        if sEvent == "char" then
+            -- Typed key
+            clear()
+            sLine = string.sub( sLine, 1, nPos ) .. param .. string.sub( sLine, nPos + 1 )
+            nPos = nPos + 1
+            recomplete()
+            redraw()
+
+        elseif sEvent == "paste" then
+            -- Pasted text
+            clear()
+            sLine = string.sub( sLine, 1, nPos ) .. param .. string.sub( sLine, nPos + 1 )
+            nPos = nPos + string.len( param )
+            recomplete()
+            redraw()
+
+        elseif sEvent == "key" then
+            if param == keys.enter then
+                -- Enter
+                if nCompletion then
+                    clear()
+                    uncomplete()
+                    redraw()
+                end
+                break
+                
+            elseif param == keys.left then
+                -- Left
+                if nPos > 0 then
+                    clear()
+                    nPos = nPos - 1
+                    recomplete()
+                    redraw()
+                end
+                
+            elseif param == keys.right then
+                -- Right                
+                if nPos < string.len(sLine) then
+                    -- Move right
+                    clear()
+                    nPos = nPos + 1
+                    recomplete()
+                    redraw()
+                else
+                    -- Accept autocomplete
+                    acceptCompletion()
+                end
+
+            elseif param == keys.up or param == keys.down then
+                -- Up or down
+                if nCompletion then
+                    -- Cycle completions
+                    clear()
+                    if param == keys.up then
+                        nCompletion = nCompletion - 1
+                        if nCompletion < 1 then
+                            nCompletion = #tCompletions
+                        end
+                    elseif param == keys.down then
+                        nCompletion = nCompletion + 1
+                        if nCompletion > #tCompletions then
+                            nCompletion = 1
+                        end
+                    end
+                    redraw()
+
+                elseif _tHistory then
+                    -- Cycle history
+                    clear()
+                    if param == keys.up then
+                        -- Up
+                        if nHistoryPos == nil then
+                            if #_tHistory > 0 then
+                                nHistoryPos = #_tHistory
+                            end
+                        elseif nHistoryPos > 1 then
+                            nHistoryPos = nHistoryPos - 1
+                        end
+                    else
+                        -- Down
+                        if nHistoryPos == #_tHistory then
+                            nHistoryPos = nil
+                        elseif nHistoryPos ~= nil then
+                            nHistoryPos = nHistoryPos + 1
+                        end                        
+                    end
+                    if nHistoryPos then
+                        sLine = _tHistory[nHistoryPos]
+                        nPos = string.len( sLine ) 
+                    else
+                        sLine = ""
+                        nPos = 0
+                    end
+                    uncomplete()
+                    redraw()
+
+                end
+
+            elseif param == keys.backspace then
+                -- Backspace
+                if nPos > 0 then
+                    clear()
+                    sLine = string.sub( sLine, 1, nPos - 1 ) .. string.sub( sLine, nPos + 1 )
+                    nPos = nPos - 1
+                    recomplete()
+                    redraw()
+                end
+
+            elseif param == keys.home then
+                -- Home
+                if nPos > 0 then
+                    clear()
+                    nPos = 0
+                    recomplete()
+                    redraw()
+                end
+
+            elseif param == keys.delete then
+                -- Delete
+                if nPos < string.len(sLine) then
+                    clear()
+                    sLine = string.sub( sLine, 1, nPos ) .. string.sub( sLine, nPos + 2 )                
+                    recomplete()
+                    redraw()
+                end
+
+            elseif param == keys["end"] then
+                -- End
+                if nPos < string.len(sLine ) then
+                    clear()
+                    nPos = string.len(sLine)
+                    recomplete()
+                    redraw()
+                end
+
+            elseif param == keys.tab then
+                -- Tab (accept autocomplete)
+                acceptCompletion()
+
+            end
+
+        elseif sEvent == "term_resize" then
+            -- Terminal resized
+            w = term.getSize()
+            redraw()
+
+        end
+    end
+
+    local cx, cy = term.getCursorPos()
+    term.setCursorBlink( false )
+    term.setCursorPos( w + 1, cy )
+    print()
+    
+    return sLine
+end
+
+-- Better serialize function
+local g_tLuaKeywords = {
+    [ "and" ] = true,
+    [ "break" ] = true,
+    [ "do" ] = true,
+    [ "else" ] = true,
+    [ "elseif" ] = true,
+    [ "end" ] = true,
+    [ "false" ] = true,
+    [ "for" ] = true,
+    [ "function" ] = true,
+    [ "if" ] = true,
+    [ "in" ] = true,
+    [ "local" ] = true,
+    [ "nil" ] = true,
+    [ "not" ] = true,
+    [ "or" ] = true,
+    [ "repeat" ] = true,
+    [ "return" ] = true,
+    [ "then" ] = true,
+    [ "true" ] = true,
+    [ "until" ] = true,
+    [ "while" ] = true,
+}
+
+local function serializeImpl( t, tTracking, sIndent )
+    local sType = type(t)
+    if sType == "table" then
+        if tTracking[t] ~= nil then
+            return "recursive"
+        end
+        tTracking[t] = true
+
+        if next(t) == nil then
+            -- Empty tables are simple
+            return "{}"
+        else
+            -- Other tables take more work
+            local sResult = "{\n"
+            local sSubIndent = sIndent .. "  "
+            local tSeen = {}
+            for k,v in ipairs(t) do
+                tSeen[k] = true
+                sResult = sResult .. sSubIndent .. serializeImpl( v, tTracking, sSubIndent ) .. ",\n"
+            end
+            for k,v in pairs(t) do
+                if not tSeen[k] then
+                    local sEntry
+                    if type(k) == "string" and not g_tLuaKeywords[k] and string.match( k, "^[%a_][%a%d_]*$" ) then
+                        sEntry = k .. " = " .. serializeImpl( v, tTracking, sSubIndent ) .. ",\n"
+                    else
+                        sEntry = "[ " .. serializeImpl( k, tTracking, sSubIndent ) .. " ] = " .. serializeImpl( v, tTracking, sSubIndent ) .. ",\n"
+                    end
+                    sResult = sResult .. sSubIndent .. sEntry
+                end
+            end
+            sResult = sResult .. sIndent .. "}"
+            return sResult
+        end
+        
+    elseif sType == "string" then
+        return string.format( "%q", t )
+    
+    elseif sType == "number" or sType == "boolean" or sType == "nil" then
+        return tostring(t)
+        
+    else
+        return "unserializable"
+        
+    end
+end
+
+function textutils.serialize( t )
+    local tTracking = {}
+    return serializeImpl( t, tTracking, "" )
 end
 
 -- Actual kernel runtime
-kernelLog:debug("Initializing kernel calls")
+kernelLog:info("initializing kernel calls")
 _G.kernel = {}
 _G.signal = {}
 _G.signal = {
@@ -867,9 +1227,25 @@ _G.signal = {
     getName = function(sig) for k,v in pairs(signal) do if sig == v then return k end end end
 }
 
+function hasFunction(val)
+    if type(val) == "function" then return true
+    elseif type(val) == "table" then for k,v in ipairs(val) do if hasFunction(v) then return true end end end
+    return false
+end
+
 local process_table = {}
 local nativeQueueEvent = os.queueEvent
+local nativePullEvent = os.pullEvent
 local pidenv = {}
+local eventFunctions = {}
+function os.queueEvent(ev, ...) 
+    local ef = {}
+    if eventFunctions[_G._PID] == nil then eventFunctions[_G._PID] = {} end
+    if eventFunctions[_G._PID][ev] == nil then eventFunctions[_G._PID][ev] = {} end
+    if table.pack(...).n > 0 then for k,v in pairs({...}) do if hasFunction(v) then ef[k+2] = v end end end
+    table.insert(eventFunctions[_G._PID][ev], ef)
+    nativeQueueEvent(ev, "CustomEvent,PID=" .. _G._PID, ...) 
+end
 function kernel.exec(path, env, ...) 
     if type(env) == "table" then 
         pidenv[_G._PID] = env
@@ -881,14 +1257,22 @@ end
 function kernel.fork(name, func, env, ...) 
     if type(env) == "table" then 
         pidenv[_G._PID] = env
-        os.queueEvent("kcall_fork_process", string.dump(func), name, ...)
-    else os.queueEvent("kcall_fork_process", string.dump(func), name, env, ...) end 
+        os.queueEvent("kcall_fork_process", func, name, ...)
+    else os.queueEvent("kcall_fork_process", func, name, env, ...) end 
     local _, pid = os.pullEvent("process_started")
     return pid
 end
 function kernel.kill(pid, sig) os.queueEvent(signal.getName(sig), pid) end
 function kernel.signal(sig, handler) os.queueEvent("kcall_signal_handler", sig, handler) end
-function kernel.send(pid, ev, ...) nativeQueueEvent(ev, "CustomEvent,PID="..tostring(pid), ...) end
+function kernel.send(pid, ev, ...) 
+    if pid == nil then error("PID must be set", 2) end
+    local ef = {}
+    if eventFunctions[pid] == nil then eventFunctions[pid] = {} end
+    if eventFunctions[pid][ev] == nil then eventFunctions[pid][ev] = {} end
+    if table.pack(...).n > 0 then for k,v in pairs({...}) do if hasFunction(v) then ef[k+1] = v end end end
+    table.insert(eventFunctions[pid][ev], ef)
+    nativeQueueEvent(ev, "CustomEvent,PID=" .. pid, ...) 
+end
 function kernel.broadcast(ev, ...) kernel.send(0, ev, ...) end
 function kernel.getPID() return _G._PID end
 function kernel.chvt(id) os.queueEvent("kcall_change_vt", id) end
@@ -1052,8 +1436,6 @@ function kernel.popen(path, mode, env, ...)
     return pipefd[pid]
 end
 
-function fs.pipe()
-
 local orig_read = read
 function _G.read(...)
     if pipes[_PID] == nil or pipes[_PID].write == nil then return orig_read(...) else
@@ -1070,7 +1452,18 @@ function _G.read(...)
     end
 end
 
-function os.queueEvent(ev, ...) nativeQueueEvent(ev, "CustomEvent,PID=" .. _G._PID, ...) end
+function os.pullEvent( sFilter )
+    local eventData = table.pack( os.pullEventRaw( sFilter ) )
+    local ev = eventData[1]
+    if ev == "terminate" then
+        error( "Terminated", 0 )
+    end
+    if eventFunctions[_G._PID] ~= nil and eventFunctions[_G._PID][ev] ~= nil and #eventFunctions[_G._PID][ev] > 0 then
+        local ef = table.remove(eventFunctions[_G._PID][ev], 1)
+        for k = 2, eventData.n do if ef[k] ~= nil then eventData[k] = ef[k] end end
+    end
+    return table.unpack( eventData, 1, eventData.n )
+end
 
 local firstProgram = shell.resolveProgram("init")
 local loginProgram = shell.resolveProgram("login")
@@ -1082,15 +1475,13 @@ fs.setOwner(firstProgram, 0)
 local oldPath = shell.path()
 local kernel_running = true
 --if shell ~= nil then shell.setPath(oldPath .. ":/" .. CCKitGlobals.CCKitDir .. "/ktools") end
-table.insert(process_table, {coro=coroutine.create(nativeRun), path=firstProgram, started=false, filter=nil, args={...}, signals={}, user=0, vt=1, loggedin=true, env=_ENV, term=vts[1], main=true})
-term.clear()
-term.setCursorPos(1, 1)
+table.insert(process_table, {coro=coroutine.create(nativeRun), path=firstProgram, started=false, filter=nil, args={...}, signals={}, user=0, vt=1, loggedin=false, env=_ENV, term=vts[1], main=true})
 local orig_shell = shell
-kernel.log:info("Starting CCKernel2.")
+kernel.log:info("starting init program")
 local function killProcess(pid)
     local oldparent = process_table[pid].parent
     process_table[pid] = nil
-    kernel.send(oldparent, "process_complete", pid, false)
+    if oldparent ~= nil then kernel.send(oldparent, "process_complete", pid, false) end
     local restart = true
     while restart do
         restart = false
@@ -1102,12 +1493,12 @@ local function killProcess(pid)
     end
 end
 while kernel_running do
-    if not vts[currentVT].started then 
+    if not vts[currentVT].started and process_table[1] ~= nil then 
         local pid = table.maxn(process_table) + 1
         table.insert(process_table, pid, {coro=coroutine.create(nativeRun), path=loginProgram, started=false, filter=nil, args={...}, signals={}, user=0, vt=currentVT, parent=0, loggedin=false, env=_ENV, term=vts[currentVT], main=true}) 
         vts[currentVT].started = true
     end
-    local e = {os.pullEvent()}
+    local e = table.pack(os.pullEvent())
     if process_table[1] == nil then
         --log:log("First process stopped, ending CCKernel")
         print("Press enter to continue.")
@@ -1144,6 +1535,10 @@ while kernel_running do
         PID = tonumber(string.sub(e[2], string.len("CustomEvent,PID=")+1))
         --print("Sending " .. e[1] .. " to " .. tostring(PID))
         table.remove(e, 2)
+    end
+    if eventFunctions[PID] ~= nil and eventFunctions[PID][e[1]] ~= nil and #eventFunctions[PID][e[1]] > 0 then
+        local ef = table.remove(eventFunctions[PID][e[1]], 1)
+        for k = 2, e.n do if ef[k] ~= nil then e[k] = ef[k] end end
     end
     if e[1] == "kcall_get_process_table" then
         e[2] = deepcopy(process_table)
@@ -1191,7 +1586,8 @@ while kernel_running do
         kernel.log:debug(name)
         if func == nil then kernel.log:debug("Func is nil") end
         local env = pidenv[PID]
-        table.insert(process_table, pid, {coro=coroutine.create(loadstring(func)), path="["..name.."]", started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=process_table[PID].loggedin, parent=PID, term=vts[process_table[PID].vt], main=false})
+        if process_table[PID] == nil then error("Parent doesn't exist! " .. PID) end
+        table.insert(process_table, pid, {coro=coroutine.create(func), path="["..name.."]", started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=process_table[PID].loggedin, parent=PID, term=vts[process_table[PID].vt], main=false})
         kernel.send(PID, "process_started", pid)
     elseif e[1] == "kcall_open_pipe" then
         table.remove(e, 1)
@@ -1320,6 +1716,7 @@ term.clear()
 term.setCursorPos(1, 1)
 os.run = nativeRun
 os.queueEvent = nativeQueueEvent
+os.pullEvent = nativePullEvent
 term.native = nativeNative
 term.setGraphicsMode = nativeSetGraphics
 term.getGraphicsMode = nativeGetGraphics

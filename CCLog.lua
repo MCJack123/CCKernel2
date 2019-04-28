@@ -63,6 +63,8 @@ CCLog.default = {}
 CCLog.default.fileDescriptor = nil
 CCLog.default.shell = nil
 CCLog.default.consoleLogLevel = CCLog.logLevels.warning
+CCLog.default.logToConsole = false
+CCLog.default.term = term.native()
 
 function CCLog.default:open()
     if self.fileDescriptor == nil then
@@ -74,10 +76,13 @@ end
 function CCLog.default:write(text, level)
     self.fileDescriptor.write(text)
     if self.logToConsole and level >= self.consoleLogLevel then
+        local lastTerm = term.current()
+        term.redirect(self.term)
         local lastColor = term.getTextColor()
         term.setTextColor(CCLog.logColors[level])
         write(text) 
         term.setTextColor(lastColor)
+        term.redirect(lastTerm)
     end
 end
 function CCLog.default:debug(name, text, class, lineno)

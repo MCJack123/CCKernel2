@@ -1,5 +1,7 @@
 {
     name = "early",
     description = "Early Boot",
-    requires = {}
+    requires = {
+        "initd"
+    }
 }

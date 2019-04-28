@@ -1,5 +1,7 @@
 if kernel == nil then print("This requires CCKernel2.") end
 
+CCLog.default.consoleLogLevel = CCLog.logLevels.warning
+
 function status(message, stat)
     if stat == nil then 
         write("        ")
@@ -44,6 +46,12 @@ serviceDatabase = {}
 
 function startService(sname)
     if serviceDatabase[sname] ~= nil then return true end
+    if sname == "initd" then
+        status("Starting Init Daemon...")
+        serviceDatabase[sname] = kernel.fork("initd", initd)
+        kernel.setProcessProperty(serviceDatabase[sname], "loggedin", false)
+        return status("Started Init Daemon.", true)
+    end
     local service = readService(sname)
     if service == nil then return status("Could not find service " .. sname .. ".", false) end
     if service.dependencies ~= nil and #service.dependencies > 0 then
@@ -71,6 +79,11 @@ end
 
 function stopService(sname)
     if serviceDatabase[sname] == nil then return true end
+    if sname == "initd" then
+        status("Stopping Init Daemon...")
+        kernel.kill(serviceDatabase[sname], signal.SIGTERM) 
+        return status("Stopped Init Daemon.", true)
+    end
     local service = readService(sname)
     if service == nil then return status("Could not find service " .. sname .. ".", false) end
     status("Stopping " .. service.description .. "...")
@@ -109,6 +122,40 @@ local function reachTarget(tname)
     return status("Reached target " .. target.description .. ".", true)
 end
 
+function initd()
+    while true do
+        local ev, p1, p2, p3 = os.pullEvent()
+        if ev == "service_start" then startService(p1)
+        elseif ev == "service_stop" then stopService(p1)
+        elseif ev == "service_restart" then restartService(p1)
+        elseif ev == "service_get_pid" then kernel.send(p1 or 0, "service_pid", serviceDatabase[p2])
+        elseif ev == "service_get_status" then
+            local retval = false
+            if serviceDatabase[p2] ~= nil then 
+                retval = kernel.getProcesses()[serviceDatabase[p2]] ~= nil 
+                if not retval then serviceDatabase[p2] = nil end
+            end
+            kernel.send(p1 or 0, "service_status", retval)
+        elseif ev == "service_get_list" then
+            local retval = {initd = true}
+            local ptab = kernel.getProcesses()
+            local list = fs.list("/etc/init/system/services")
+            for k,v in pairs(list) do 
+                if v ~= ".permissions" then
+                    local service = string.gsub(v, ".ltn", "")
+                    local status = false
+                    if serviceDatabase[service] ~= nil then 
+                        status = ptab[serviceDatabase[service]] ~= nil 
+                        if not status then serviceDatabase[service] = nil end
+                    end
+                    retval[service] = status
+                end
+            end
+            kernel.send(p1 or 0, "service_list", retval)
+        end
+    end
+end
+
 local nativeShutdown = os.shutdown
 local nativeReboot = os.reboot
 
@@ -117,6 +164,7 @@ function os.shutdown()
     local stop = {}
     for k,v in pairs(serviceDatabase) do stop[k] = v end
     for k,v in pairs(stop) do stopService(k) end
+    status("Starting Shutdown...")
     nativeShutdown()
 end
 
@@ -125,22 +173,37 @@ function os.reboot()
     local stop = {}
     for k,v in pairs(serviceDatabase) do stop[k] = v end
     for k,v in pairs(stop) do stopService(k) end
+    status("Starting Reboot...")
     nativeReboot()
 end
 
 local startTarget = bit.bmask(kernel.getArgs(), kernel.arguments.single) and "singleuser" or "multiuser"
-
 if not reachTarget(startTarget) then return status("Could not start CCKernel2.", false) end
 
 _G.services = {}
-services.start = startService
-services.stop = stopService
-services.restart = restartService
-function services.pid(sname, pid) return serviceDatabase[sname] end
-function services.status(sname) if serviceDatabase[sname] == nil then return false else return kernel.getProcesses()[serviceDatabase[sname]] ~= nil end end
+function services.start(sname) kernel.send(serviceDatabase["initd"], "service_start", sname) end
+function services.stop(sname) kernel.send(serviceDatabase["initd"], "service_stop", sname) end
+function services.restart(sname) kernel.send(serviceDatabase["initd"], "service_restart", sname) end
+function services.pid(sname)
+    kernel.send(serviceDatabase["initd"], "service_get_pid", _PID, sname)
+    return select(2, os.pullEvent("service_pid"))
+end
+function services.status(sname)
+    kernel.send(serviceDatabase["initd"], "service_get_status", _PID, sname)
+    return select(2, os.pullEvent("service_status"))
+end
+function services.list()
+    kernel.send(serviceDatabase["initd"], "service_get_list", _PID)
+    return select(2, os.pullEvent("service_list"))
+end
 services.running = true
 
 os.sleep(2)
+
+if bit.bmask(kernel.getArgs(), kernel.arguments.single) then
+    write("Press return to enter maintenance mode: ")
+    read()
+end
 
 while services.running do
     shell.run(bit.bmask(kernel.getArgs(), kernel.arguments.single) and "shell" or "login")
@@ -158,3 +221,4 @@ os.shutdown = nativeShutdown
 os.reboot = nativeReboot
 _G.services = nil
 kernel.setProcessProperty(_PID, "loggedin", false)
+kernel.kill(0, signal.SIGKILL)

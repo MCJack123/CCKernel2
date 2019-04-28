@@ -1,4 +1,5 @@
 .vscode/ipch/3f98a1789beefa1b/mmap_address.bin
 .vscode/ipch/e2d5929e98fa254/mmap_address.bin
-LibDeflate.lua
 binstr.lua
+.permissions
+**/.permissions

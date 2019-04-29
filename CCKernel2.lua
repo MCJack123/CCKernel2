@@ -425,13 +425,18 @@ local devfs = {
 }
 
 local mounts = {["dev"] = devfs}
+local links = {}
 
 function fs.linkDir(from, to)
     if string.sub(from, string.len(from)) == "/" then from = string.sub(from, 1, string.len(from) - 1) end
     if string.sub(to, 1, 1) == "/" then to = string.sub(to, 2) end
     if string.sub(to, string.len(to)) == "/" then to = string.sub(to, 1, string.len(to) - 1) end
+    if not fs.isDir(from) then error(from .. ": Directory not found", 2) end
+    if fs.getDir(to) ~= "/" and fs.getDir(to) ~= "" and not bit.bmask(fs.getPermissions(fs.getDir(to), getuid()), permissions.write) then error(to .. ": Access denied", 2) end
+    if fs.getDir(from) ~= "/" and fs.getDir(from) ~= "" and not bit.bmask(fs.getPermissions(from, getuid()), permissions.read) then error(from .. ": Access denied", 2) end
     local combine = function(path) if string.sub(path, 1, 1) == "/" then return from .. path else return from .. "/" .. path end end
-    return {
+    table.insert(links, to)
+    mounts[to] = {
         list = function(path) return fs.list(combine(path)) end,
         exists = function(path) return fs.exists(combine(path)) end,
         isDir = function(path) return fs.isDir(combine(path)) end,
@@ -447,7 +452,37 @@ function fs.linkDir(from, to)
     }
 end
 
-function fs.unlinkDir(to) if to ~= "dev" then mounts[to] = nil end end
+local function linkHome()
+    local to = "~"
+    local combine = function(path) if string.sub(path, 1, 1) == "/" then return users.getHomeDir() .. path else return users.getHomeDir() .. "/" .. path end end
+    table.insert(links, to)
+    mounts[to] = {
+        list = function(path) return fs.list(combine(path)) end,
+        exists = function(path) return fs.exists(combine(path)) end,
+        isDir = function(path) return fs.isDir(combine(path)) end,
+        getPermissions = function(path, uid) return fs.getPermissions(combine(path), uid) end,
+        setPermissions = function(path, uid, perm) return fs.setPermissions(combine(path), uid, perm) end,
+        getSize = function(path) return fs.getSize(combine(path)) end,
+        getFreeSpace = function(path) return fs.getFreeSpace(combine(path)) end,
+        makeDir = function(path) return fs.makeDir(combine(path)) end,
+        move = function(path, toPath) return fs.move(combine(path), toPath) end,
+        copy = function(path, toPath) return fs.copy(combine(path), toPath) end,
+        delete = function(path) return fs.delete(combine(path)) end,
+        open = function(path, mode) return fs.open(combine(path), mode) end
+    }
+end
+
+function fs.unlinkDir(to) 
+    if string.sub(to, 1, 1) == "/" then to = string.sub(to, 2) end
+    if string.sub(to, string.len(to)) == "/" then to = string.sub(to, 1, string.len(to) - 1) end
+    if not fs.isDir(to) then error(to .. ": Directory not found", 2) end
+    if fs.getDir(to) ~= "/" and fs.getDir(to) ~= "" and not bit.bmask(fs.getPermissions(fs.getDir(to), getuid()), permissions.write) then error(to .. ": Access denied", 2) end
+    if to ~= "dev" then for k,v in pairs(links) do if v == to then 
+        mounts[to] = nil
+        table.remove(links, k)
+        return
+    end end end 
+end
 
 local function getMount(path)
     if type(path) ~= "string" then error("bad argument #1 (expected string, got " .. type(path) .. ")", 5) end
@@ -463,11 +498,8 @@ fs.combine = orig_fs.combine
 fs.getDir = orig_fs.getDir
 fs.complete = orig_fs.complete
 fs.find = orig_fs.find
-fs.linkDir("rom/programs", "bin")
-fs.linkDir("rom/apis", "lib")
-fs.linkDir("rom/help", "man")
 
-function orig_fs.getPermissions(path, uid)
+function orig_fs.getPermissions(path, uid, create)
     if type(path) ~= "string" then error("bad argument #1 (string expected, got " .. type(path) .. ")", 3) end
     if type(uid) ~= "string" and type(uid) ~= "number" then error("bad argument #2 (number or string expected, got " .. type(path) .. ")", 3) end
     if orig_fs.getDrive(path) == "rom" then return permissions.read_execute end
@@ -478,14 +510,16 @@ function orig_fs.getPermissions(path, uid)
     end
     local default = orig_fs.isReadOnly(path) and permissions.read or permissions.full
     if not orig_fs.exists(orig_fs.getDir(path) .. "/.permissions") then 
-        textutils.serializeFile(orig_fs.getDir(path) .. "/.permissions", {[orig_fs.getName(path)] = {["*"] = default}})
+        if create then textutils.serializeFile(orig_fs.getDir(path) .. "/.permissions", {[orig_fs.getName(path)] = {["*"] = default}}) end
         return default
     end
     if uid == 0 then return default end
     local perms = textutils.unserializeFile(orig_fs.getDir(path) .. "/.permissions")
     if perms[orig_fs.getName(path)] == nil then 
-        perms[orig_fs.getName(path)] = {["*"] = default}
-        textutils.serializeFile(orig_fs.getDir(path) .. "/.permissions", perms)
+        if create then
+            perms[orig_fs.getName(path)] = {["*"] = default}
+            textutils.serializeFile(orig_fs.getDir(path) .. "/.permissions", perms)
+        end
         return default
     else return get_permissions(perms[orig_fs.getName(path)], uid) end
 end
@@ -549,6 +583,10 @@ function fs.list(path)
     if not bit.bmask(m.getPermissions(p, getuid()), permissions.read) then error(path .. ": Access denied", 2) end
     local retval = m.list(p)
     for k,v in pairs(mounts) do if fs.getDir(k) == path then table.insert(retval, fs.getName(k)) end end
+    for k,v in pairs(retval) do if v == ".permissions" then 
+        table.remove(retval, k)
+        break
+    end end
     return retval
 end
 
@@ -567,10 +605,10 @@ function fs.isReadOnly(path)
     return not bit.bmask(m.getPermissions(p, getuid()), permissions.write)
 end
 
-function fs.getPermissions(path, uid)
+function fs.getPermissions(path, uid, create)
     local m, p = getMount(path)
     if uid == nil then uid = getuid() end
-    return m.getPermissions(p, uid)
+    return m.getPermissions(p, uid, create)
 end
 
 function fs.setPermissions(path, uid, perm)
@@ -656,28 +694,58 @@ end
 
 function fs.open(path, mode)
     local m, p = getMount(path)
-    if fs.getName(path) ~= ".permissions" then
+    if fs.getName(path) ~= ".permissions" then 
         if string.sub(mode, 1, 1) == "r" and not bit.bmask(m.getPermissions(p, getuid()), permissions.read) then error(path .. ": Access denied", 2) end
-        if string.sub(mode, 1, 1) == "w" and not bit.bmask(m.getPermissions(p, getuid()), permissions.write) then error(path .. ": Access denied", 2) end
-        if string.sub(mode, 1, 1) == "a" and not bit.bmask(m.getPermissions(p, getuid()), permissions.write) then error(path .. ": Access denied", 2) end
+    end
+    if fs.getDir(path) ~= "/" and fs.getDir(path) ~= "" and fs.getDir(path) ~= ".." and fs.getDir(path) ~= "/.." and (string.sub(mode, 1, 1) == "w" or string.sub(mode, 1, 1) == "a") and fs.exists(fs.getDir(path) .. "/.permissions") then
+        if string.sub(mode, 1, 1) == "w" and not bit.bmask(m.getPermissions(p, getuid(), false), permissions.write) then error(path .. ": Access denied", 2) end
+        if string.sub(mode, 1, 1) == "a" and not bit.bmask(m.getPermissions(p, getuid(), false), permissions.write) then error(path .. ": Access denied", 2) end
     end
     return m.open(p, mode)
 end
 
 function fs.mount(path, mount)
+    if _UID ~= 0 then error("Root permissions required to mount") end
     if type(path) ~= "string" then error("bad argument #1 (expected string, got " .. type(path) .. ")", 2) end
     if type(mount) ~= "table" then error("bad argument #2 (expected table, got " .. type(path) .. ")", 2) end
     for k,v in pairs(devfs) do if mount[k] == nil then error("mount missing function " .. k, 2) end end
     mounts[path] = mount
 end
 
+function fs.unmount(path)
+    if _UID ~= 0 then error("Root permissions required to unmount") end
+    if type(path) ~= "string" then error("bad argument #1 (expected string, got " .. type(path) .. ")", 2) end
+    mounts[path] = nil
+end
+
 function fs.hasPermissions(path, uid, perm) return bit.bmask(fs.getPermissions(path, uid), perm) end
 function fs.mounts() return mounts end
-function fs.reset() fs = orig_fs end
+--function fs.reset() fs = orig_fs end
+
+fs.linkDir("rom/programs", "bin")
+fs.linkDir("rom/apis", "lib")
+fs.linkDir("rom/help", "man")
 
 -- Rewrite executor
 local orig_loadfile = loadfile
 local nativeRun = os.run
+
+local function tokenise( ... )
+    local sLine = table.concat( { ... }, " " )
+    local tWords = {}
+    local bQuoted = false
+    for match in string.gmatch( sLine .. "\"", "(.-)\"" ) do
+        if bQuoted then
+            table.insert( tWords, match )
+        else
+            for m in string.gmatch( match, "[^ \t]+" ) do
+                table.insert( tWords, m )
+            end
+        end
+        bQuoted = not bQuoted
+    end
+    return tWords
+end
 
 _G.loadfile = function( _sFile, _tEnv )
     if type( _sFile ) ~= "string" then
@@ -686,11 +754,37 @@ _G.loadfile = function( _sFile, _tEnv )
     if _tEnv ~= nil and type( _tEnv ) ~= "table" then
         error( "bad argument #2 (expected table, got " .. type( _tEnv ) .. ")", 2 ) 
     end
-    if not fs.hasPermissions( _sFile, nil, fs.permissions.execute ) then return nil, "Permission denied" end
+    if not fs.hasPermissions( _sFile, nil, fs.permissions.execute ) then return nil, _sFile .. ": Permission denied" end
     local file = fs.open( _sFile, "r" )
     if file then
-        local func, err = load( file.readAll(), fs.getName( _sFile ), "t", _tEnv )
+        local script = file.readAll()
         file.close()
+        if string.sub(script, 1, 3) == "--!" then
+            local space = string.find(script, " ")
+            local enter = string.find(script, "\n")
+            local sh = string.sub(script, 4, math.min(space, enter) - 1)
+            if sh == _sFile then return nil, "Cannot run recursive script" end
+            local args = {}
+            if enter > space then args = tokenise(string.sub(script, space + 1, enter - 1)) end
+            script = string.sub(script, string.find(script, "\n") + 1)
+            return function(...)
+                local _args = {}
+                for k,v in pairs(args) do table.insert(_args, v) end
+                for k,v in pairs({...}) do table.insert(_args, v) end
+                local pipe = kernel.popen(sh, "w", _tEnv, table.unpack(_args))
+                pipe.write(script .. "\n")
+                local pid = pipe.pid()
+                local _, p, s = os.pullEvent("process_complete")
+                if p ~= pid then while p ~= pid do 
+                    _, p, s = os.pullEvent("process_complete") 
+                    if type(p) ~= "number" then 
+                        kernel.log:traceback("Failed to run " .. _sPath .. ", PID " .. pid) 
+                        error("Failed to run " .. _sPath .. ", PID " .. pid, 3)
+                    end
+                end end
+            end
+        end
+        local func, err = load( script, fs.getName( _sFile ), "t", _tEnv )
         if fs.hasPermissions( _sFile, nil, fs.permissions.setuid ) and err == nil then 
             return function( ... )
                 local args = { ... }
@@ -728,15 +822,19 @@ function os.run( _tEnv, _sPath, ... )
 end
 
 -- User system
--- Passwords are stored in /etc/passwd as a LON file with the format {UID = {password = sha256(pass), name = "name"}, ...}
+-- Passwords are stored in /etc/passwd as a LTN file with the format {UID = {password = sha256(pass), name = "name"}, ...}
 kernelLog:info("initializing user system")
 fs.makeDir("/usr")
 fs.makeDir("/usr/bin")
 fs.makeDir("/usr/share")
 fs.makeDir("/usr/share/help")
 fs.makeDir("/usr/lib")
+fs.makeDir("/usr/modules")
 fs.makeDir("/etc")
 fs.makeDir("/home")
+fs.makeDir("/var/root")
+fs.setPermissions("/var/root", 0, fs.permissions.full)
+fs.setPermissions("/var/root", "*", fs.permissions.none)
 if not fs.exists("/etc/passwd") then
     local user = {}
     print("Please create a new user.")
@@ -797,15 +895,18 @@ function users.checkPassword(uid, password)
 end
 
 function users.getHomeDir() 
-    local retval = "/home/" .. users.getShortName(_G._UID)
+    if _G._UID == 0 then return "var/root" end
+    local retval = "home/" .. users.getShortName(_G._UID)
     if not fs.exists(retval) then
         fs.makeDir(retval)
         fs.setOwner(retval)
         fs.setPermissions(retval, nil, fs.permissions.full)
         fs.setPermissions(retval, "*", fs.permissions.none)
     end
-    return retval .. "/"
+    return retval
 end
+
+linkHome()
 
 function users.create(name, uid)
     if users.getuid() ~= 0 then error("Permission denied", 2) end
@@ -1436,19 +1537,22 @@ function kernel.popen(path, mode, env, ...)
     return pipefd[pid]
 end
 
+function kernel.isPiped() return pipes[_PID] ~= nil end
+function kernel.isOutputPiped() return pipes[_PID] ~= nil and pipes[_PID].read ~= nil end
+function kernel.isInputPiped() return pipes[_PID] ~= nil and pipes[_PID].write ~= nil end
+
 local orig_read = read
 function _G.read(...)
     if pipes[_PID] == nil or pipes[_PID].write == nil then return orig_read(...) else
-        local len = string.find(pipes[PID].write, "\n")
-        if len == nil then
-            local retval = pipes[PID].write
-            pipes[PID].write = ""
-            return retval
-        else
-            local retval = string.sub(pipes[PID].write, 1, len)
-            pipes[PID].write = string.sub(pipes[PID].write, len)
-            return retval
+        while string.len(pipes[_PID].write) == 0 do return nil end
+        local len = string.find(pipes[_PID].write, "\n")
+        while len == nil do 
+            os.pullEvent()
+            len = string.find(pipes[_PID].write, "\n")
         end
+        local retval = string.sub(pipes[_PID].write, 1, len)
+        pipes[_PID].write = string.sub(pipes[_PID].write, len + 1)
+        return retval
     end
 end
 
@@ -1481,6 +1585,8 @@ kernel.log:info("starting init program")
 local function killProcess(pid)
     local oldparent = process_table[pid].parent
     process_table[pid] = nil
+    pipes[pid] = nil
+    pipefd[pid] = nil
     if oldparent ~= nil then kernel.send(oldparent, "process_complete", pid, false) end
     local restart = true
     while restart do
@@ -1714,6 +1820,7 @@ term.setBackgroundColor(colors.black)
 term.setTextColor(colors.white)
 term.clear()
 term.setCursorPos(1, 1)
+kernelLog:close()
 os.run = nativeRun
 os.queueEvent = nativeQueueEvent
 os.pullEvent = nativePullEvent

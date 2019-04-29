@@ -15,7 +15,10 @@ while true do
     else
         kernel.setProcessProperty(_PID, "loggedin", true)
         users.setuid(uid)
+        local oldDir = shell.dir()
+        shell.setDir("~")
         shell.run("shell")
+        shell.setDir(oldDir)
         kernel.setProcessProperty(_PID, "loggedin", false)
         term.clear()
         term.setCursorPos(1, 1)

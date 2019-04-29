@@ -2,37 +2,18 @@
   [ "install.lua" ] = {
     [ "*" ] = 15,
   },
-  [ "lsperm.lua" ] = {
-    [ "*" ] = 15,
-  },
   [ "CCLog.lua" ] = {
     [ "*" ] = 15,
   },
-  [ ".git" ] = {
+  [ "redirtest.lua" ] = {
     [ "*" ] = 15,
   },
-  [ "init.lua" ] = {
+  [ "archive.lua" ] = {
+    [ "*" ] = 15,
+  },
+  [ "sudo.lua" ] = {
     owner = 0,
-    [ "*" ] = 25,
-  },
-  init = {
-    [ "*" ] = 15,
-  },
-  [ "README.md" ] = {
-    [ "*" ] = 15,
-  },
-  [ "binstr.lua" ] = {
-    [ "*" ] = 15,
-  },
-  [ "login.lua" ] = {
-    owner = 0,
-    [ "*" ] = 25,
-  },
-  [ "LibDeflate.lua" ] = {
-    [ "*" ] = 15,
-  },
-  [ "CCOSCrypto.lua" ] = {
-    [ "*" ] = 15,
+    [ "*" ] = 31,
   },
   [ "whoami.lua" ] = {
     [ "*" ] = 15,
@@ -43,33 +24,55 @@
   bin = {
     [ "*" ] = 15,
   },
-  [ "CCKernel2.lua" ] = {
-    owner = 0,
-    [ "*" ] = 31,
-  },
-  [ ".vscode" ] = {
-    [ "*" ] = 15,
-  },
-  [ ".permissions" ] = {
-    [ "*" ] = 15,
-  },
-  [ "sudo.lua" ] = {
-    owner = 0,
-    [ "*" ] = 31,
-  },
   [ "ps.lua" ] = {
     [ "*" ] = 15,
   },
-  [ "archiver.lua" ] = {
-    [ "*" ] = 15,
-  },
-  [ "redirtest.lua" ] = {
+  [ "lsperm.lua" ] = {
     [ "*" ] = 15,
   },
   [ ".gitignore" ] = {
     [ "*" ] = 15,
   },
+  init = {
+    [ "*" ] = 15,
+  },
+  [ "LibDeflate.lua" ] = {
+    [ "*" ] = 15,
+  },
+  [ "init.lua" ] = {
+    owner = 0,
+    [ "*" ] = 25,
+  },
+  [ "binstr.lua" ] = {
+    [ "*" ] = 15,
+  },
+  [ "CCKernel2.lua" ] = {
+    owner = 0,
+    [ "*" ] = 31,
+  },
+  [ "README.md" ] = {
+    [ "*" ] = 15,
+  },
+  [ "login.lua" ] = {
+    owner = 0,
+    [ "*" ] = 25,
+  },
   [ "tty.lua" ] = {
+    [ "*" ] = 15,
+  },
+  [ ".git" ] = {
+    [ "*" ] = 15,
+  },
+  [ "archiver.lua" ] = {
+    [ "*" ] = 15,
+  },
+  [ ".permissions" ] = {
+    [ "*" ] = 15,
+  },
+  [ ".vscode" ] = {
+    [ "*" ] = 15,
+  },
+  [ "CCOSCrypto.lua" ] = {
     [ "*" ] = 15,
   },
 }

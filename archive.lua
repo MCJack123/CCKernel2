@@ -187,6 +187,12 @@ local function create(data)
         return retval
     end
 
+    -- for CCKernel2
+    function retval.getPermissions() return 15 end
+    function retval.setPermissions() end
+    function retval.getOwner() return 0 end
+    function retval.setOwner() end
+
     return retval
 end
 

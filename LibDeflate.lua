@@ -385,7 +385,7 @@ else
     end
 
     bnot = function(x)
-        return bxor(x, (2^(bits or floor(log(x, 2))))-1)
+        return xor(x, 0xFFFFFFFF)
     end
 end
 
@@ -2193,7 +2193,8 @@ function LibDeflate:CompressZlibWithDict(str, dictionary, configs)
 end
 
 local function time()
-    if os.epoch ~= nil then return math.floor(os.epoch("utc") / 1000)
+    if os == nil then return 0
+    elseif os.epoch ~= nil then return math.floor(os.epoch("utc") / 1000)
         -- ComputerCraft's os.time() gives in-game time, os.epoch gives POSIX time in ms
     elseif os.time() < 30 then return 0 -- ComputerCraft 1.79 and below don't have os.epoch(), so no time.
     else return os.time() end -- All other Luas.
@@ -2226,7 +2227,7 @@ function LibDeflate:CompressGzip(str, configs)
     end
     return string_char(0x1f, 0x8b, 8, 0, byte(t, 0), byte(t, 1), byte(t, 2), 
         byte(t, 3), cf, 0xFF) .. res .. string_char(byte(crc, 0), byte(crc, 1),
-        byte(crc, 2), byte(crc, 3), byte(len, 0), byte(len, 1), byte(len, 2), byte(len, 3))
+        byte(crc, 2), byte(crc, 3), byte(len, 0), byte(len, 1), byte(len, 2), byte(len, 3)), 0
 end
 
 --[[ --------------------------------------------------------------------------
@@ -3050,7 +3051,7 @@ function LibDeflate:DecompressGzip(str)
     src_checksum = bnot(src_checksum)
     local target_checksum = self:CRC32(res)
     if xor(src_checksum, target_checksum) ~= 0xFFFFFFFF then return nil, -2 end
-    return res
+    return res, 0
 end
 
 -- Encoding algorithms
@@ -3539,6 +3540,48 @@ local function InternalClearCache()
 	_addon_channel_codec = nil
 end
 
+local function GetGzipInfo(str)
+    local arg_valid, arg_err = IsValidArguments(str)
+	if not arg_valid then
+		error(("Usage: GetGzipInfo(str): "..arg_err), 2)
+    end
+    local retval = {}
+	if string_byte(string.sub(str, 1, 1)) ~= 31 or string_byte(string.sub(str, 2, 2)) ~= 139 then
+		return nil, -1
+    end
+    if band(string_byte(string.sub(str, 4, 4)), 0xE0) ~= 0 then
+        return nil, -3
+    end
+    if string_byte(string.sub(str, 3, 3)) ~= 8 then
+        return nil, -4
+    else retval.method = "deflate" end
+    retval.uncompressed_name = "stdout"
+    local offset = 10
+	if band(string_byte(string.sub(str, 4, 4)), 4) == 4 then 
+		offset = offset + string_byte(string.sub(str, 11, 11)) * 256 + string_byte(string.sub(str, 12, 12)) 
+    end
+    if band(string_byte(string.sub(str, 4, 4)), 8) == 8 then
+        local start_offset = offset
+        while string_byte(string.sub(str, offset, offset)) ~= 0 do offset = offset + 1 end
+        retval.uncompressed_name = string.sub(str, start_offset, offset - 1)
+    end
+    if band(string_byte(string.sub(str, 4, 4)), 16) == 16 then
+        while string_byte(string.sub(str, offset, offset)) ~= 0 do offset = offset + 1 end
+    end
+    if band(string_byte(string.sub(str, 4, 4)), 2) == 2 then
+        local src_checksum = string_byte(string.sub(str, offset + 1, offset + 1)) * 256 + string_byte(string.sub(str, offset, offset)) 
+        local target_checksum = band(self:CRC32(string.sub(str, 1, offset - 1)), 0xFFFF)
+        if xor(src_checksum, target_checksum) ~= 0xFFFF then return nil, -5 end
+        offset = offset + 2
+    end
+    retval.crc = string_byte(str, -5) * 0x1000000 + string_byte(str, -6) * 0x10000 + string_byte(str, -7) * 256 + string_byte(str, -8)
+    retval.uncompressed = string_byte(str, -1) * 0x1000000 + string_byte(str, -2) * 0x10000 + string_byte(str, -3) * 256 + string_byte(str, -4)
+    retval.compressed = string.len(str)
+    retval.timestamp = string_byte(str, 8) * 0x1000000 + string_byte(str, 7) * 0x10000 + string_byte(str, 6) * 0x100 + string_byte(str, 5)
+    retval.ratio = (1 - (retval.compressed / retval.uncompressed)) * 100
+    return retval
+end
+
 -- For test. Don't use the functions in this table for real application.
 -- Stuffs in this table is subject to change.
 LibDeflate.internals = {
@@ -3547,7 +3590,8 @@ LibDeflate.internals = {
 	IsEqualAdler32 = IsEqualAdler32,
 	_byte_to_6bit_char = _byte_to_6bit_char,
 	_6bit_to_byte = _6bit_to_byte,
-	InternalClearCache = InternalClearCache,
+    InternalClearCache = InternalClearCache,
+    GetGzipInfo = GetGzipInfo,
 }
 
 --[[-- Commandline options
@@ -3576,31 +3620,6 @@ if shell then
     debug = {getinfo = function()
         return {source = "LibDeflate.lua", short_src = "LibDeflate.lua"}
     end}
-    os.exit = function() error() end
-    io.stderr = {write = function(self, text) printError(text) end}
-end
-
-local function openFile(file, mode) 
-    if shell then 
-        local file = fs.open(file, mode)
-        local retval = {close = file.close}
-        if string.find(mode, "r") then retval.read = function()
-            local retval = ""
-            local b = file.read()
-            while b ~= nil do
-                retval = retval .. string.char(b)
-                b = file.read()
-            end
-            file.close()
-            return retval
-        end end
-        if string.find(mode, "w") then retval.write = function(this, str)
-            if type(str) ~= "string" then error("Not a string: " .. textutils.serialize(str), 2) end
-            for s in string.gmatch(str, ".") do file.write(string.byte(s)) end
-            file.close()
-        end end
-        return retval
-    else return io.open(file, mode) end
 end
 
 -- currently no plan to support stdin and stdout.
@@ -3608,6 +3627,30 @@ end
 if io and os and debug and arg then
 	local io = io
 	local os = os
+	local exit = os.exit or error
+	local stderr = io.stderr and io.stderr.write or function(self, text) printError(text) end
+	local function openFile(file, mode) 
+		if shell then 
+			local file = fs.open(file, mode)
+			local retval = {close = file.close}
+			if string.find(mode, "r") then retval.read = function()
+				local retval = ""
+				local b = file.read()
+				while b ~= nil do
+					retval = retval .. string.char(b)
+					b = file.read()
+				end
+				file.close()
+				return retval
+			end end
+			if string.find(mode, "w") then retval.write = function(this, str)
+				if type(str) ~= "string" then error("bad argument #1 (expected string, got " .. type(str) .. ")", 2) end
+				for s in string.gmatch(str, ".") do file.write(string.byte(s)) end
+				file.close()
+			end end
+			return retval
+		else return io.open(file, mode) end
+	end
 	local debug_info = debug.getinfo(1)
 	if debug_info.source == arg[0]
 		or debug_info.short_src == arg[0] then
@@ -3638,10 +3681,10 @@ if io and os and debug and arg then
 					.." specify a special compression strategy.\n"
 					.."  -v    print the version and copyright info.\n"
 					.."  --zlib  use zlib format instead of raw deflate.\n")
-				os.exit(0)
+				exit(0)
 			elseif a == "-v" then
 				print(LibDeflate._COPYRIGHT)
-				os.exit(0)
+				exit(0)
 			elseif a:find("^%-[0-9]$") then
 				level = tonumber(a:sub(2, 2))
 			elseif a == "-d" then
@@ -3650,15 +3693,15 @@ if io and os and debug and arg then
 				i = i + 1
 				local dict_filename = arg[i]
 				if not dict_filename then
-					io.stderr:write("You must speicify the dict filename")
-					os.exit(1)
+					stderr(io.stderr, "You must speicify the dict filename")
+					exit(1)
 				end
 				local dict_file, dict_status = openFile(dict_filename, "rb")
 				if not dict_file then
-					io.stderr:write(
+					stderr(io.stderr,
 					("LibDeflate: Cannot read the dictionary file '%s': %s")
 					:format(dict_filename, dict_status))
-					os.exit(1)
+					exit(1)
 				end
 				local dict_str = dict_file:read("*all")
 				dict_file:close()
@@ -3678,25 +3721,25 @@ if io and os and debug and arg then
 			elseif a == "--zlib" then
 				compress_mode = 1
 			elseif a:find("^%-") then
-				io.stderr:write(("LibDeflate: Invalid argument: %s")
+				stderr(io.stderr, ("LibDeflate: Invalid argument: %s")
 						:format(a))
-				os.exit(1)
+				exit(1)
 			else
 				if not input then
 					input, status = openFile(a, "rb")
 					if not input then
-						io.stderr:write(
+						stderr(io.stderr,
 							("LibDeflate: Cannot read the file '%s': %s")
 							:format(a, tostring(status)))
-						os.exit(1)
+						exit(1)
 					end
 				elseif not output then
 					output, status = openFile(a, "wb")
 					if not output then
-						io.stderr:write(
+						stderr(io.stderr,
 							("LibDeflate: Cannot write the file '%s': %s")
 							:format(a, tostring(status)))
-						os.exit(1)
+						exit(1)
 					end
 				end
 			end
@@ -3704,9 +3747,9 @@ if io and os and debug and arg then
 		end -- while (arg[i])
 
 		if not input or not output then
-			io.stderr:write("LibDeflate:"
+			stderr(io.stderr, "LibDeflate:"
 				.." You must specify both input and output files.")
-			os.exit(1)
+			exit(1)
 		end
 
 		local input_data = input:read("*all")
@@ -3758,8 +3801,8 @@ if io and os and debug and arg then
 		end
 
 		if not output_data then
-			io.stderr:write("LibDeflate: Decompress fails.")
-			os.exit(1)
+			stderr(io.stderr, "LibDeflate: Decompress fails.")
+			exit(1)
 		end
 
 		output:write(output_data)
@@ -3770,9 +3813,9 @@ if io and os and debug and arg then
 			output:close()
 		end
 
-		io.stderr:write(("Successfully writes %d bytes"):format(
+		stderr(io.stderr, ("Successfully wrote %d bytes"):format(
 			output_data:len()))
-		os.exit(0)
+		exit(0)
 	end
 end
 

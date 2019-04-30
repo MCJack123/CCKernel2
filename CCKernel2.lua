@@ -619,8 +619,14 @@ end
 
 function fs.addPermissions(path, uid, perm)
     local m, p = getMount(path)
-    if uid == nil then uid =getuid() end
+    if uid == nil then uid = getuid() end
     return m.setPermissions(p, uid, bit.bor(m.getPermissions(p, uid), perm))
+end
+
+function fs.removePermissions(path, uid, perm)
+    local m, p = getMount(path)
+    if uid == nil then uid = getuid() end
+    return m.setPermissions(p, uid, bit.band(m.getPermissions(p, uid), bit.bnot(perm)))
 end
 
 function fs.getOwner(path)
@@ -719,7 +725,11 @@ function fs.unmount(path)
 end
 
 function fs.hasPermissions(path, uid, perm) return bit.bmask(fs.getPermissions(path, uid), perm) end
-function fs.mounts() return mounts end
+function fs.mounts() 
+    local retval = {}
+    for k,v in pairs(mounts) do retval[k] = v end
+    return retval
+end
 --function fs.reset() fs = orig_fs end
 
 fs.linkDir("rom/programs", "bin")
@@ -773,6 +783,7 @@ _G.loadfile = function( _sFile, _tEnv )
                 for k,v in pairs({...}) do table.insert(_args, v) end
                 local pipe = kernel.popen(sh, "w", _tEnv, table.unpack(_args))
                 pipe.write(script .. "\n")
+                pipe.close(true)
                 local pid = pipe.pid()
                 local _, p, s = os.pullEvent("process_complete")
                 if p ~= pid then while p ~= pid do 
@@ -914,10 +925,16 @@ function users.create(name, uid)
     uid = uid or table.maxn(fl) + 1
     fl[uid] = {name = name}
     textutils.serializeFile("/etc/passwd", fl)
+    fs.makeDir("home/" .. name)
+    fs.setOwner("home/" .. name, uid)
+    fs.setPermissions("home/" .. name, "*", permissions.none)
+    fs.setPermissions("home/" .. name, uid, permissions.full)
 end
 
-function users.setFullName(uid, name)
-    if users.getuid() ~= 0 and users.getuid() ~= uid then error("Permission denied", 2) end
+function users.setFullName(name)
+    local uid = _UID
+    if uid == 0 then return end
+    --if users.getuid() ~= 0 and users.getuid() ~= uid then error("Permission denied", 2) end
     local fl = textutils.unserializeFile("/etc/passwd")
     if fl[uid] == nil then error("User ID " .. uid .. " does not exist", 2) end
     fl[uid].fullName = name
@@ -935,6 +952,7 @@ end
 function users.delete(uid)
     if users.getuid() ~= 0 then error("Permission denied", 2) end
     local fl = textutils.unserializeFile("/etc/passwd")
+    fs.delete("home/" .. fl[uid].name)
     fl[uid] = nil
     textutils.serializeFile("/etc/passwd", fl)
 end
@@ -954,7 +972,12 @@ _ENV.error = function(message, level)
 end
 
 -- **Cool** read function (allows linux-style password entry)
+local nextReadNil = false
 function _G.read( _sReplaceChar, _tHistory, _fnComplete, _sDefault )
+    if nextReadNil then
+        nextReadNil = false
+        return nil
+    end
     if _sReplaceChar ~= nil and type( _sReplaceChar ) ~= "string" then
         error( "bad argument #1 (expected string, got " .. type( _sReplaceChar ) .. ")", 2 ) 
     end
@@ -969,12 +992,13 @@ function _G.read( _sReplaceChar, _tHistory, _fnComplete, _sDefault )
     end
     term.setCursorBlink( true )
 
-    local sLine
+    local sDefault
     if type( _sDefault ) == "string" then
-        sLine = _sDefault
+        sDefault = _sDefault
     else
-        sLine = ""
+        sDefault = ""
     end
+    local sLine = sDefault
     local nHistoryPos
     local nPos = #sLine
     if _sReplaceChar then
@@ -983,6 +1007,7 @@ function _G.read( _sReplaceChar, _tHistory, _fnComplete, _sDefault )
 
     local tCompletions
     local nCompletion
+    local bModifier = false
     local function recomplete()
         if _fnComplete and nPos == string.len(sLine) then
             tCompletions = _fnComplete( sLine )
@@ -1002,7 +1027,7 @@ function _G.read( _sReplaceChar, _tHistory, _fnComplete, _sDefault )
         nCompletion = nil
     end
 
-    local w = term.getSize()
+    local w, h = term.getSize()
     local sx = term.getCursorPos()
 
     local function redraw( _bClear )
@@ -1070,11 +1095,85 @@ function _G.read( _sReplaceChar, _tHistory, _fnComplete, _sDefault )
         local sEvent, param = os.pullEvent()
         if sEvent == "char" then
             -- Typed key
-            clear()
-            sLine = string.sub( sLine, 1, nPos ) .. param .. string.sub( sLine, nPos + 1 )
-            nPos = nPos + 1
-            recomplete()
-            redraw()
+            if bModifier then
+                if param == "c" and kernel ~= nil then 
+                    print("^C")
+                    kernel.kill(_PID, signal.SIGINT)
+                elseif param == "d" then
+                    nextReadNil = true
+                    if nCompletion then
+                        clear()
+                        uncomplete()
+                        redraw()
+                    end
+                    break
+                elseif param == "u" then
+                    clear()
+                    sLine = sDefault
+                    nPos = #sLine
+                    recomplete()
+                    redraw()
+                elseif param == "l" then
+                    clear()
+                    local cx, cy = term.getCursorPos()
+                    term.scroll(cy - 1)
+                    term.setCursorPos(cx, 1)
+                    recomplete()
+                    redraw()
+                elseif param == "a" then
+                    clear()
+                    nPos = 0
+                    recomplete()
+                    redraw()
+                elseif param == "e" then
+                    clear()
+                    nPos = #sLine
+                    recomplete()
+                    redraw()
+                elseif param == "b" then
+                    -- Left
+                    if nPos > 0 then
+                        clear()
+                        nPos = nPos - 1
+                        recomplete()
+                        redraw()
+                    end
+                elseif param == "f" then
+                    -- Right                
+                    if nPos < string.len(sLine) then
+                        -- Move right
+                        clear()
+                        nPos = nPos + 1
+                        recomplete()
+                        redraw()
+                    end
+                elseif param == "h" then
+                    -- Backspace
+                    if nPos > 0 then
+                        clear()
+                        sLine = string.sub( sLine, 1, nPos - 1 ) .. string.sub( sLine, nPos + 1 )
+                        nPos = nPos - 1
+                        recomplete()
+                        redraw()
+                    end
+                elseif param == "w" then
+                    if string.find(sLine, " ") ~= nil then
+                        clear()
+                        local lastSpace = string.find(sLine, " ")
+                        while string.find(sLine, " ", lastSpace + 1) ~= nil do lastSpace = string.find(sLine, " ", lastSpace + 1) end
+                        sLine = string.sub( sLine, 1, lastSpace - 1 )
+                        nPos = #sLine
+                        recomplete()
+                        redraw()
+                    end
+                end
+            else
+                clear()
+                sLine = string.sub( sLine, 1, nPos ) .. param .. string.sub( sLine, nPos + 1 )
+                nPos = nPos + 1
+                recomplete()
+                redraw()
+            end
 
         elseif sEvent == "paste" then
             -- Pasted text
@@ -1083,6 +1182,9 @@ function _G.read( _sReplaceChar, _tHistory, _fnComplete, _sDefault )
             nPos = nPos + string.len( param )
             recomplete()
             redraw()
+
+        elseif sEvent == "key_up" and param == keys.leftAlt then
+            bModifier = false
 
         elseif sEvent == "key" then
             if param == keys.enter then
@@ -1206,6 +1308,9 @@ function _G.read( _sReplaceChar, _tHistory, _fnComplete, _sDefault )
             elseif param == keys.tab then
                 -- Tab (accept autocomplete)
                 acceptCompletion()
+
+            elseif param == keys.leftAlt or param == keys.leftCtrl then
+                bModifier = true
 
             end
 
@@ -1544,14 +1649,12 @@ function kernel.isInputPiped() return pipes[_PID] ~= nil and pipes[_PID].write ~
 local orig_read = read
 function _G.read(...)
     if pipes[_PID] == nil or pipes[_PID].write == nil then return orig_read(...) else
-        while string.len(pipes[_PID].write) == 0 do return nil end
-        local len = string.find(pipes[_PID].write, "\n")
-        while len == nil do 
-            os.pullEvent()
-            len = string.find(pipes[_PID].write, "\n")
+        while string.len(pipes[_PID].write) == 0 do 
+            if not pipes[_PID].opened then return nil end
+            os.pullEvent() 
         end
-        local retval = string.sub(pipes[_PID].write, 1, len)
-        pipes[_PID].write = string.sub(pipes[_PID].write, len + 1)
+        local retval = pipes[_PID].write
+        pipes[_PID].write = ""
         return retval
     end
 end
@@ -1703,22 +1806,28 @@ while kernel_running do
         local pid = table.maxn(process_table) + 1
         table.insert(process_table, pid, {coro=coroutine.create(nativeRun), path=path, started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=process_table[PID].loggedin, parent=PID, term=vts[process_table[PID].vt], main=false})
         local retval = {}
-        pipes[pid] = {}
-        function retval.close()
-            kernel.kill(pid, signal.SIGINT)
-            pipes[pid] = nil
+        pipes[pid] = {opened=true}
+        function retval.close(continue)
+            pipes[pid].opened = false
+            if not continue then
+                kernel.kill(pid, signal.SIGINT)
+                pipes[pid] = nil
+            end
         end
+        function retval.is_open() return pipes[pid] and pipes[pid].opened end
         function retval.pid() return pid end
         if string.find(mode, "r") ~= nil then
             pipes[pid].read = createPipeTerminal()
             process_table[pid].term = pipes[pid].read
             retval.readLine = function()
+                if not pipes[pid].opened then return nil end
                 if pipes[pid].read.readOffset >= pipes[pid].read.screenOffset + pipes[pid].read.height then return nil end
                 local retval = trim11(table.concat(pipes[pid].read.screen[pipes[pid].read.readOffset + 1]))
                 pipes[pid].read.readOffset = pipes[pid].read.readOffset + 1
                 return retval
             end
             retval.readAll = function()
+                if not pipes[pid].opened then return nil end
                 local retvalt = ""
                 local line = retval.readLine()
                 while line ~= nil and line ~= "" do
@@ -1731,10 +1840,10 @@ while kernel_running do
         if string.find(mode, "w") ~= nil then
             pipes[pid].write = ""
             retval.write = function(d) 
-                pipes[pid].write = pipes[pid].write .. d 
+                if pipes[pid].opened then pipes[pid].write = pipes[pid].write .. d end
             end
             retval.writeLine = function(d) 
-                pipes[pid].write = pipes[pid].write .. d .. "\n" 
+                if pipes[pid].opened then pipes[pid].write = pipes[pid].write .. d .. "\n" end
             end
         end
         pipefd[pid] = retval

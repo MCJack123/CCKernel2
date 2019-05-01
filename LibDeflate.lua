@@ -313,25 +313,14 @@ do
 end
 
 -- CRC-16/CRC-32 computation
-local band, bnot, xor, lshift, rshift
+local xor
 
-if bit ~= nil then
-    band = bit.band
-    bnot = bit.bnot
-    xor = bit.bxor
-    lshift = bit.blshift
-    rshift = bit.blogic_rshift
-elseif bit32 ~= nil then
-    band = bit32.band
-    bnot = bit32.bnot
-    xor = bit32.bxor
-    lshift = bit32.lshift
-    rshift = bit32.rshift
-else
-    xor = function(a, b)
-        local calc = 0    
-    
-        for i = 32, 0, -1 do
+if bit ~= nil then xor = bit.bxor
+elseif bit32 ~= nil then xor = bit32.bxor 
+else xor = function(a, b)
+    local calc = 0    
+
+    for i = 32, 0, -1 do
         local val = 2 ^ i
         local aa = false
         local bb = false
@@ -359,35 +348,10 @@ else
         if not (aa and bb) and (aa or bb) then
             calc = calc + val
         end
-        end
-    
-        return calc
-    end
-    
-    lshift = function(num, left)
-        local res = num * (2 ^ left)
-        return res % (2 ^ 32)
-    end
-    
-    rshift = function(num, right)
-        local res = num / (2 ^ right)
-        return math.floor(res)
-    end
-    
-    band = function(a, b)
-        local p,c=1,0
-        while a>0 and b>0 do
-            local ra,rb=a%2,b%2
-            if ra+rb>1 then c=c+p end
-            a,b,p=(a-ra)/2,(b-rb)/2,p*2
-        end
-        return c
     end
 
-    bnot = function(x)
-        return xor(x, 0xFFFFFFFF)
-    end
-end
+    return calc
+end end
 
 -- CRC-32-IEEE 802.3 (V.42)
 local POLY = 0xEDB88320
@@ -407,8 +371,8 @@ end
 local crc_table = memoize(function(i)
   local crc = i
   for _=1,8 do
-    local b = band(crc, 1)
-    crc = rshift(crc, 1)
+    local b = crc % 2 ~= 0 and 1 or 0
+    crc = math.floor(crc / 2)
     if b == 1 then crc = xor(crc, POLY) end
   end
   return crc
@@ -416,10 +380,10 @@ end)
 
 
 local function crc32_byte(byte, crc)
-  crc = bnot(crc or 0)
-  local v1 = rshift(crc, 8)
+  crc = xor(crc or 0, 0xFFFFFFFF)
+  local v1 = math.floor(crc / 256)
   local v2 = crc_table[xor(crc % 256, byte)]
-  return bnot(xor(v1, v2))
+  return xor(xor(v1, v2), 0xFFFFFFFF)
 end
 
 
@@ -1992,11 +1956,13 @@ local function Deflate(configs, WriteBits, WriteString, FlushWriter, str
 				string_table[j] = string_table[i-offset]
 				j = j + 1
             end
+            local delete = {}
 			for k, t in pairs(hash_tables) do
 				local tSize = #t
 				if tSize > 0 and block_end+1 - t[1] > 32768 then
-					if tSize == 1 then
-						--hash_tables[k] = nil -- seems to be causing problems
+                    if tSize == 1 then
+                        if _G.os and _G.os.pullEvent then table.insert(delete, k)
+						else hash_tables[k] = nil end
 					else
 						local new = {}
 						local newSize = 0
@@ -2010,10 +1976,13 @@ local function Deflate(configs, WriteBits, WriteString, FlushWriter, str
 						hash_tables[k] = new
 					end
 				end
-			end
+            end
+            if #delete > 0 then 
+                for _,k in pairs(delete) do hash_tables[k] = nil end 
+            end
         end
 
-        if os and os.pullEvent then -- ComputerCraft requires this for long-running processes
+        if _G.os and _G.os.pullEvent then -- ComputerCraft requires this for long-running processes
             os.queueEvent("nosleep")
             os.pullEvent()
         end
@@ -2200,7 +2169,7 @@ local function time()
     else return os.time() end -- All other Luas.
 end
 
-local function byte(num, b) return band(rshift(num, b * 8), 0xFF) end
+local function byte(num, b) return math.floor(num / math.pow(2, b*8)) % 0x100 end
 
 --- Compress using the gzip format.
 -- @param str [string] the data to be compressed.
@@ -2291,10 +2260,10 @@ local function CreateReader(input_string)
 		local byte_from_cache = (cache_bitlen/8 < bytelen)
 			and (cache_bitlen/8) or bytelen
 		for _=1, byte_from_cache do
-			local byte = cache % 256
+			local _byte = cache % 256
 			buffer_size = buffer_size + 1
-			buffer[buffer_size] = string_char(byte)
-			cache = (cache - byte) / 256
+			buffer[buffer_size] = string_char(_byte)
+			cache = (cache - _byte) / 256
 		end
 		cache_bitlen = cache_bitlen - byte_from_cache*8
 		bytelen = bytelen - byte_from_cache
@@ -3003,6 +2972,51 @@ do
 		, _fix_block_dist_huffman_bitlen, 31, 5)
 end
 
+-- Returns a table with info about the gzip
+local function GetGzipInfo(str)
+    local arg_valid, arg_err = IsValidArguments(str)
+	if not arg_valid then
+		error(("Usage: GetGzipInfo(str): "..arg_err), 2)
+    end
+    local retval = {}
+	if string_byte(str, 1) ~= 31 or string_byte(str, 2) ~= 139 then
+		return nil, -1
+    end
+    if string_byte(str, 4) > 0x1f then
+        return nil, -3
+    end
+    if string_byte(str, 3) ~= 8 then
+        return nil, -4
+    else retval.method = "deflate" end
+    retval.uncompressed_name = "stdout"
+    local offset = 10
+	if (string_byte(str, 4) / 4) % 2 ~= 0 then 
+		offset = offset + string_byte(str, 11) * 256 + string_byte(str, 12) 
+    end
+    if (string_byte(str, 4) / 8) % 2 ~= 0 then
+        local start_offset = offset
+        while string_byte(str, offset) ~= 0 do offset = offset + 1 end
+        retval.uncompressed_name = string.sub(str, start_offset, offset - 1)
+    end
+    if (string_byte(str, 4) / 16) % 2 ~= 0 then
+        while string_byte(str, offset) ~= 0 do offset = offset + 1 end
+    end
+    if (string_byte(str, 4) / 2) % 2 ~= 0 then
+        local src_checksum = string_byte(str, offset + 1) * 256
+                             + string_byte(str, offset) 
+        local target_checksum = self:CRC32(string.sub(str, 1, offset - 1)) % 0x10000
+        if xor(src_checksum, target_checksum) ~= 0xFFFF then return nil, -5 end
+        offset = offset + 2
+    end
+    retval.crc = string_byte(str, -5) * 0x1000000 + string_byte(str, -6) * 0x10000 + string_byte(str, -7) * 256 + string_byte(str, -8)
+    retval.uncompressed = string_byte(str, -1) * 0x1000000 + string_byte(str, -2) * 0x10000 + string_byte(str, -3) * 256 + string_byte(str, -4)
+    retval.compressed = string.len(str)
+    retval.timestamp = string_byte(str, 8) * 0x1000000 + string_byte(str, 7) * 0x10000 + string_byte(str, 6) * 0x100 + string_byte(str, 5)
+    retval.ratio = (1 - (retval.compressed / retval.uncompressed)) * 100
+    retval.offset = offset
+    return retval
+end
+
 --- Decompress a gzip compressed data.
 -- @param str [string] The data to be decompressed
 -- @return [string/nil] If the decompression succeeds, return the decompressed
@@ -3020,37 +3034,13 @@ function LibDeflate:DecompressGzip(str)
 	if not arg_valid then
 		error(("Usage: LibDeflate:DecompressGzip(str): "..arg_err), 2)
 	end
-	if string_byte(string.sub(str, 1, 1)) ~= 31 or string_byte(string.sub(str, 2, 2)) ~= 139 then
-		return nil, -1
-    end
-    if band(string_byte(string.sub(str, 4, 4)), 0xE0) ~= 0 then
-        return nil, -3
-    end
-    if string_byte(string.sub(str, 3, 3)) ~= 8 then
-        return nil, -4
-    end 
-    local offset = 10
-	if band(string_byte(string.sub(str, 4, 4)), 4) == 4 then 
-		offset = offset + string_byte(string.sub(str, 11, 11)) * 256 + string_byte(string.sub(str, 12, 12)) 
-    end
-    if band(string_byte(string.sub(str, 4, 4)), 8) == 8 then
-        while string_byte(string.sub(str, offset, offset)) ~= 0 do offset = offset + 1 end
-    end
-    if band(string_byte(string.sub(str, 4, 4)), 16) == 16 then
-        while string_byte(string.sub(str, offset, offset)) ~= 0 do offset = offset + 1 end
-    end
-    if band(string_byte(string.sub(str, 4, 4)), 2) == 2 then
-        local src_checksum = string_byte(string.sub(str, offset + 1, offset + 1)) * 256 + string_byte(string.sub(str, offset, offset)) 
-        local target_checksum = band(self:CRC32(string.sub(str, 1, offset - 1)), 0xFFFF)
-        if xor(src_checksum, target_checksum) ~= 0xFFFF then return nil, -5 end
-        offset = offset + 2
-    end
-    local res, err = DecompressDeflateInternal(string.sub(str, offset + 1, -8))
+    local info, err = GetGzipInfo(str)
+    if info == nil then return info, err end
+    local res, err = DecompressDeflateInternal(string.sub(str, info.offset + 1, -8))
     if res == nil then return res, err end
-    local src_checksum = string_byte(string.sub(str, -5, -5)) * 0x1000000 + string_byte(string.sub(str, -6, -6)) * 0x10000 + string_byte(string.sub(str, -7, -7)) * 256 + string_byte(string.sub(str, -8, -8))
-    src_checksum = bnot(src_checksum)
-    local target_checksum = self:CRC32(res)
-    if xor(src_checksum, target_checksum) ~= 0xFFFFFFFF then return nil, -2 end
+    if string.len(res) ~= info.uncompressed then return nil, -6 end
+    local target_checksum = xor(self:CRC32(res), 0xFFFFFFFF)
+    if xor(info.crc, target_checksum) ~= 0xFFFFFFFF then return nil, -2 end
     return res, 0
 end
 
@@ -3144,13 +3134,13 @@ function LibDeflate:CreateCodec(reserved_chars, escape_chars
 	-- build list of bytes not available as a suffix to a prefix byte
 	local taken = {}
 	for i = 1, #encode_bytes do
-		local byte = string_byte(encode_bytes, i, i)
-		if taken[byte] then -- Modified by LibDeflate:
+		local _byte = string_byte(encode_bytes, i, i)
+		if taken[_byte] then -- Modified by LibDeflate:
 			return nil, "There must be no duplicate characters in the"
 				.." concatenation of reserved_chars, escape_chars and"
 				.." map_chars."
 		end
-		taken[byte] = true
+		taken[_byte] = true
 	end
 
 	-- Modified by LibDeflate:
@@ -3525,10 +3515,10 @@ function LibDeflate:DecodeForPrint(str)
 	end
 
 	while cache_bitlen >= 8 do
-		local byte = cache % 256
+		local _byte = cache % 256
 		buffer_size = buffer_size + 1
-		buffer[buffer_size] = _byte_to_char[byte]
-		cache = (cache - byte) / 256
+		buffer[buffer_size] = _byte_to_char[_byte]
+		cache = (cache - _byte) / 256
 		cache_bitlen = cache_bitlen - 8
 	end
 
@@ -3538,48 +3528,6 @@ end
 local function InternalClearCache()
 	_chat_channel_codec = nil
 	_addon_channel_codec = nil
-end
-
-local function GetGzipInfo(str)
-    local arg_valid, arg_err = IsValidArguments(str)
-	if not arg_valid then
-		error(("Usage: GetGzipInfo(str): "..arg_err), 2)
-    end
-    local retval = {}
-	if string_byte(string.sub(str, 1, 1)) ~= 31 or string_byte(string.sub(str, 2, 2)) ~= 139 then
-		return nil, -1
-    end
-    if band(string_byte(string.sub(str, 4, 4)), 0xE0) ~= 0 then
-        return nil, -3
-    end
-    if string_byte(string.sub(str, 3, 3)) ~= 8 then
-        return nil, -4
-    else retval.method = "deflate" end
-    retval.uncompressed_name = "stdout"
-    local offset = 10
-	if band(string_byte(string.sub(str, 4, 4)), 4) == 4 then 
-		offset = offset + string_byte(string.sub(str, 11, 11)) * 256 + string_byte(string.sub(str, 12, 12)) 
-    end
-    if band(string_byte(string.sub(str, 4, 4)), 8) == 8 then
-        local start_offset = offset
-        while string_byte(string.sub(str, offset, offset)) ~= 0 do offset = offset + 1 end
-        retval.uncompressed_name = string.sub(str, start_offset, offset - 1)
-    end
-    if band(string_byte(string.sub(str, 4, 4)), 16) == 16 then
-        while string_byte(string.sub(str, offset, offset)) ~= 0 do offset = offset + 1 end
-    end
-    if band(string_byte(string.sub(str, 4, 4)), 2) == 2 then
-        local src_checksum = string_byte(string.sub(str, offset + 1, offset + 1)) * 256 + string_byte(string.sub(str, offset, offset)) 
-        local target_checksum = band(self:CRC32(string.sub(str, 1, offset - 1)), 0xFFFF)
-        if xor(src_checksum, target_checksum) ~= 0xFFFF then return nil, -5 end
-        offset = offset + 2
-    end
-    retval.crc = string_byte(str, -5) * 0x1000000 + string_byte(str, -6) * 0x10000 + string_byte(str, -7) * 256 + string_byte(str, -8)
-    retval.uncompressed = string_byte(str, -1) * 0x1000000 + string_byte(str, -2) * 0x10000 + string_byte(str, -3) * 256 + string_byte(str, -4)
-    retval.compressed = string.len(str)
-    retval.timestamp = string_byte(str, 8) * 0x1000000 + string_byte(str, 7) * 0x10000 + string_byte(str, 6) * 0x100 + string_byte(str, 5)
-    retval.ratio = (1 - (retval.compressed / retval.uncompressed)) * 100
-    return retval
 end
 
 -- For test. Don't use the functions in this table for real application.
@@ -3629,19 +3577,19 @@ if io and os and debug and arg then
 	local os = os
 	local exit = os.exit or error
 	local stderr = io.stderr and io.stderr.write or function(self, text) printError(text) end
-	local function openFile(file, mode) 
+	local function openFile(path, mode) 
 		if shell then 
-			local file = fs.open(file, mode)
+			local file = fs.open(path, mode)
 			local retval = {close = file.close}
 			if string.find(mode, "r") then retval.read = function()
-				local retval = ""
+				local _retval = ""
 				local b = file.read()
 				while b ~= nil do
-					retval = retval .. string.char(b)
+					_retval = _retval .. string.char(b)
 					b = file.read()
 				end
 				file.close()
-				return retval
+				return _retval
 			end end
 			if string.find(mode, "w") then retval.write = function(this, str)
 				if type(str) ~= "string" then error("bad argument #1 (expected string, got " .. type(str) .. ")", 2) end
@@ -3649,7 +3597,7 @@ if io and os and debug and arg then
 				file.close()
 			end end
 			return retval
-		else return io.open(file, mode) end
+		else return io.open(path, mode) end
 	end
 	local debug_info = debug.getinfo(1)
 	if debug_info.source == arg[0]

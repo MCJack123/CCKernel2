@@ -1,25 +1,36 @@
 if kernel == nil then error("This requires CCKernel2.") end
---os.debug("Loaded shell")
+--[[ 
+    Features:
+    * Operators
+      * a & b: Background a
+      * a | b: Pipe output of a to input of b
+      * a; b: Run a, then b
+      * a > b: Pipe output of a to file b
+      * a < b: Pipe file b into input of a
+    * Variables
+      * a = b: Set variable a to value of b
+      * $a: Insert variable a
+      * $(a): Insert output of command a
+      * _(a): Insert result of Lua script a
+    * Control
+        * if a then b... end: Run b... if a is true
+        * if a then b... else c... end: Run b... if a is true, otherwise run c
+        * while a do b... end: Run b... while a is true
+]]
+
 local multishell = multishell
 local parentShell = shell
---os.debug("Getting parent")
 local parentTerm = term.current()
---os.debug("Checking multishell")
 if multishell then
-   -- os.debug("Getting current")
     local c = multishell.getCurrent()
-    --os.debug("Got current")
     multishell.setTitle( c, "shell" )
-    --os.debug("Set title")
 end
---os.debug("After multishell")
 local bExit = false
 local sDir = (parentShell and parentShell.dir()) or ""
 local sPath = (parentShell and parentShell.path()) or ".:/rom/programs"
 local tAliases = (parentShell and parentShell.aliases()) or {}
 local tCompletionInfo = (parentShell and parentShell.getCompletionInfo()) or {}
 local tProgramStack = {}
---os.debug("Creating functions")
 local shell = {}
 local function createShellEnv( sDir )
     local tEnv = {}
@@ -475,8 +486,6 @@ if multishell then
     end
 end
 
---os.debug("Starting shell")
-
 local tArgs = { ... }
 if #tArgs > 0 then
     -- "shell x y z"
@@ -490,8 +499,6 @@ else
     term.setTextColour( promptColour )
     print( os.version() )
     term.setTextColour( textColour )
-    --if multishell then print("Multishell enabled") end
-    --print(keys.enter)
 
     -- Run the startup program
     if parentShell == nil then
@@ -516,7 +523,6 @@ else
             term.setTextColour( textColour )
         end
 
-        --os.debug("Reading")
         local sLine
         if settings.get( "shell.autocomplete" ) then
             sLine = read( nil, tCommandHistory, shell.complete )

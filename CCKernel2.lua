@@ -53,9 +53,15 @@ local function apilookup( _sTopic )
     if type( _sTopic ) ~= "string" then
         error( "bad argument #1 (expected string, got " .. type( _sTopic ) .. ")", 2 ) 
     end
+
+    -- Check absolute path
+    if fs.exists(_sTopic) then return _sTopic
+    elseif fs.exists(_sTopic .. ".lua") then return _sTopic .. ".lua" end
+
  	-- Look on the path variable
     for sPath in string.gmatch(apipath, "[^:]+") do
-    	sPath = fs.combine( sPath, _sTopic )
+        sPath = fs.combine( sPath, _sTopic )
+        if sPath == nil then error("sPath is nil") end
     	if fs.exists( sPath ) and not fs.isDir( sPath ) then
 			return sPath
         elseif fs.exists( sPath..".lua" ) and not fs.isDir( sPath..".lua" ) then
@@ -64,19 +70,23 @@ local function apilookup( _sTopic )
     end
     
     -- Check shell
-    if shell ~= nil then return shell.resolveProgram(_sTopic) end
-    
-	-- Not found
-	return _sTopic
+    if shell ~= nil then 
+        print("shell", _sTopic, shell.dir())
+        return shell.resolveProgram(_sTopic) 
+    end
+
+    -- Not found
+    return nil
 end
 
 local tAPIsLoading = {}
-function os.loadAPI( _sPath )
-    if type( _sPath ) ~= "string" then
-        error( "bad argument #1 (expected string, got " .. type( _sPath ) .. ")", 2 ) 
+function os.loadAPI( _sPathh )
+    if type( _sPathh ) ~= "string" then
+        error( "bad argument #1 (expected string, got " .. type( _sPathh ) .. ")", 2 ) 
     end
 
-    _sPath = apilookup( _sPath )
+    local _sPath = apilookup( _sPathh )
+    if _sPath == nil then error("API not found", 2) end
 
     local sName = fs.getName( _sPath )
     if sName:sub(-4) == ".lua" then

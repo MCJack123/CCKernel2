@@ -188,6 +188,129 @@ local function tokenise( ... )
     return tWords
 end
 
+local variables = {}
+
+local function trim11(s)
+    local n = s:find"%S"
+    return n and s:match(".*%S", n) or ""
+end
+
+local function splitOperators(str)
+    local retval = {}
+    for tok in string.gmatch(str, "[^&|<>;]+[&|<>;]?") do
+        if string.match(tok, "[^=]+=[^=]+") then
+            variables[trim11(string.sub(tok, 1, string.find(tok, "=") - 1))] = trim11(string.sub(tok, string.find(tok, "=") + 1))
+        else
+            local cmd = {}
+            local word = ""
+            local quote = false
+            local space_escape = false
+            for char in string.gmatch(str, ".") do
+                if char == "\"" then quote = not quote
+                elseif char == " " and not quote and not space_escape and word ~= "" then
+                    table.insert(cmd, word)
+                    word = ""
+                elseif char == "\\" and not quote then space_escape = true
+                else word = word .. char end
+                if char ~= "\\" or quote then space_escape = false end
+            end
+            if string.find(string.sub(tok, -1), "[&|<>;]") then cmd.action = string.sub(tok, -1) end
+            table.insert(retval, cmd)
+        end
+    end
+    return retval
+end
+
+local function parseVariable(v)
+    if string.sub(v, 1, 1) == "$" then return variables[string.sub(v, 2)] or ""
+    elseif string.sub(v, 1, 1) == "%" then return loadstring("return " .. string.sub(v, 2))() 
+    else return v end
+end
+
+local function parseVariables(cmd)
+    for k,v in pairs(cmd) do if k ~= "action" then cmd[k] = parseVariable(v) end end
+    return cmd
+end
+
+local function runCmds(cmds)
+    local remove = {}
+    local pipetmp = {}
+    local pipefile = {}
+    for k,v in pairs(cmds) do if v.cmd then
+        local mode = ""
+        if v.pipeOut then mode = "r" end
+        if v.pipeIn then mode = mode .. "w" end
+        if mode == "" then v.pid = kernel.exec(v.cmd, table.unpack(v.args)) else 
+            v.pipe = kernel.fork(v.cmd, mode, table.unpack(v.args))
+            if type(v.pipeIn) == "string" then
+                local file = fs.open(shell.resolve(v.pipeIn), "r")
+                v.pipe.write(file.readAll())
+                file.close()
+            end
+            v.pid = v.pipe.pid()
+        end
+        kernel.kill(v.pid, signal.SIGSTOP)
+    else table.insert(remove, k) end end
+    for k,v in pairs(remove) do cmds[v] = nil end
+    for k,v in pairs(cmds) do 
+        kernel.kill(v.pid, signal.SIGCONT) 
+        if type(v.pipeIn) == "number" or type(v.pipeOut) == "number" then pipetmp[k] = "" end
+        if type(v.pipeOut) == "string" then pipefile[k] = fs.open(v.pipeOut, "w") end
+    end
+    while true do
+        local ev, p1, p2 = os.pullEvent()
+        if ev == "process_complete" then 
+            for k,v in pairs(cmds) do 
+                if v.pid == p1 then
+                    if pipefile[k] then pipefile[k].close() end
+                    cmds[k] = nil
+                    break
+                else kernel.kill(v.pid, signal.SIGPIPE) end 
+            end
+            os.pullEvent()
+            return false
+        end
+        for k,v in pairs(cmds) do
+            if type(v.pipeIn) == "number" then 
+                v.pipe.write(pipetmp[v.pipeIn])
+                pipetmp[v.pipeIn] = ""
+            end
+            if type(v.pipeOut) == "number" then
+                pipetmp[k] = pipetmp[k] .. (v.pipe.readAll() or "")
+            elseif type(v.pipeOut) == "string" then
+                local r = v.pipe.readAll()
+                if r then pipefile[k].writeLine(r) end
+            end
+        end
+    end
+end
+
+local function runShellLine(line)
+    local cmds = splitOperators(line)
+    local incmds = {}
+    local incmd_offset = 0
+    for k,v in pairs(cmds) do
+        v = parseVariables(v)
+        local cmd = {}
+        local run = false
+        if v.action == "|" then cmd.pipeOut = k - incmd_offset + 1
+        elseif v.action == ">" then cmd.pipeOut = cmds[k+1] and cmds[k+1][1]
+        elseif v.action == "<" then cmd.pipeIn = cmds[k+1] and cmds[k+1][1]
+        elseif v.action == "&" then run = false
+        else run = true end
+        if cmds[k-1] and cmds[k-1].pipeOut == k and cmd.pipeIn == nil then cmd.pipeIn = k - incmd_offset - 1 end
+        v.action = nil
+        cmd.cmd = table.remove(v, 1)
+        cmd.args = v
+        table.insert(incmds, cmd)
+        if run then
+            runCmds(incmds)
+            incmd_offset = incmd_offset + #incmds
+            incmds = {}
+        end
+    end
+end
+
 -- Install shell API
 function shell.run( ... )
     local tWords = tokenise( ... )
@@ -533,7 +656,7 @@ else
         if sLine:match("%S") and tCommandHistory[#tCommandHistory] ~= sLine then
             table.insert( tCommandHistory, sLine )
         end
-        shell.run( sLine )
+        runShellLine( sLine )
         if term.getGraphicsMode() then term.setGraphicsMode(false) end
     end
 

@@ -71,7 +71,7 @@ local function apilookup( _sTopic )
     
     -- Check shell
     if shell ~= nil then 
-        print("shell", _sTopic, shell.dir())
+        --print("shell", _sTopic, shell.dir())
         return shell.resolveProgram(_sTopic) 
     end
 
@@ -1782,9 +1782,11 @@ while kernel_running do
                 if continue then killProcess(pid) end
             elseif sig == signal.SIGSTOP then
                 process_table[pid].stopped = true
+                vts[currentVT].write("Stopped")
             elseif sig == signal.SIGCONT then
                 process_table[pid].stopped = false
-            elseif (sig == signal.SIGBUS or sig == signal.SIGFPE or sig == signal.SIGILL or sig == signal.SIGIO or sig == signal.SIGPIPE or sig == signal.SIGSEGV or sig == signal.SIGTERM or sig == signal.SIGTRAP) and process_table[PID].user == 0 then
+                vts[currentVT].write("Continuing")
+            elseif (sig == signal.SIGBUS or sig == signal.SIGFPE or sig == signal.SIGILL or sig == signal.SIGIO or sig == signal.SIGPIPE or sig == signal.SIGSEGV or sig == signal.SIGTERM or sig == signal.SIGTRAP) then
                 if process_table[pid].signals[sig] ~= nil then process_table[pid].signals[sig](sig) end
                 killProcess(pid)
             elseif process_table[pid].signals[sig] ~= nil then process_table[pid].signals[sig](sig) end
@@ -1833,6 +1835,7 @@ while kernel_running do
                 if not pipes[pid].opened then return nil end
                 if pipes[pid].read.readOffset >= pipes[pid].read.screenOffset + pipes[pid].read.height then return nil end
                 local retval = trim11(table.concat(pipes[pid].read.screen[pipes[pid].read.readOffset + 1]))
+                if retval == "" then return nil end
                 pipes[pid].read.readOffset = pipes[pid].read.readOffset + 1
                 return retval
             end
@@ -1844,7 +1847,8 @@ while kernel_running do
                     retvalt = retvalt .. line .. "\n"
                     line = retval.readLine()
                 end
-                return retvalt
+                if retvalt == "" then return nil
+                else return retvalt end
             end
         end
         if string.find(mode, "w") ~= nil then

@@ -24,6 +24,10 @@ Features: multiprocessing, IPC, permissions, signaling, virtual terminals, devic
 This will be quite complicated and will fundamentally reshape CraftOS, but it will give so many new features to CraftOS at its base. I'm hoping to keep this as compatible with base CraftOS as possible, retaining support for all (most) programs. 
 ]]--
 
+local nativeReboot = os.reboot
+local nativeTerminal = term.native()
+local ok, err = pcall(function(...)
+
 if shell == nil then error("CCKernel2 must be run from the shell.") end
 if kernel ~= nil then error("CCKernel2 cannot be run inside itself.") end
 local myself = shell.getRunningProgram()
@@ -1445,7 +1449,7 @@ _G.signal = {
 
 function hasFunction(val)
     if type(val) == "function" then return true
-    elseif type(val) == "table" then for k,v in ipairs(val) do if hasFunction(v) then return true end end end
+    elseif type(val) == "table" then for k,v in pairs(val) do if hasFunction(v) then return true end end end
     return false
 end
 
@@ -1677,7 +1681,8 @@ function os.pullEvent( sFilter )
     end
     if eventFunctions[_G._PID] ~= nil and eventFunctions[_G._PID][ev] ~= nil and #eventFunctions[_G._PID][ev] > 0 then
         local ef = table.remove(eventFunctions[_G._PID][ev], 1)
-        for k = 2, eventData.n do if ef[k] ~= nil then eventData[k] = ef[k] end end
+        --print(textutils.serialize(ef))
+        for k,v in pairs(eventData) do if ef[k] ~= nil and k > 1 then eventData[k] = ef[k] end end
     end
     return table.unpack( eventData, 1, eventData.n )
 end
@@ -1711,13 +1716,14 @@ local function killProcess(pid)
         end end
     end
 end
+local modifiers = 0
 while kernel_running do
     if not vts[currentVT].started and process_table[1] ~= nil then 
         local pid = table.maxn(process_table) + 1
         table.insert(process_table, pid, {coro=coroutine.create(nativeRun), path=loginProgram, started=false, filter=nil, args={...}, signals={}, user=0, vt=currentVT, parent=0, loggedin=false, env=_ENV, term=vts[currentVT], main=true}) 
         vts[currentVT].started = true
     end
-    local e = table.pack(os.pullEvent())
+    local e = {os.pullEvent()}
     if process_table[1] == nil then
         --log:log("First process stopped, ending CCKernel")
         print("Press enter to continue.")
@@ -1725,28 +1731,46 @@ while kernel_running do
         kernel_running = false
         e = {"kernel_stop"}
     end
-    if e[1] == "key" and keys.getName(e[2]) ~= nil and string.find(keys.getName(e[2]), "f%d+") == 1 then
-        local num = tonumber(string.sub(keys.getName(e[2]), 2))
-        if num >= 1 and num <= 8 then
-            vts[currentVT].setVisible(false)
-            term.clear()
-            vts[num].setVisible(true)
-            currentVT = num
-            if not vts[num].started then 
-                local pid = table.maxn(process_table) + 1
-                table.insert(process_table, pid, {coro=coroutine.create(nativeRun), path=loginProgram, started=false, filter=nil, args={...}, signals={}, user=0, vt=num, loggedin=false, parent=0, env=_ENV, term=vts[num], main=true}) 
-                vts[num].started = true
+    if e[1] == "key" and keys.getName(e[2]) ~= nil then
+        if string.find(keys.getName(e[2]), "f%d+") == 1 then
+            local num = tonumber(string.sub(keys.getName(e[2]), 2))
+            if num >= 1 and num <= 8 then
+                vts[currentVT].setVisible(false)
+                term.clear()
+                vts[num].setVisible(true)
+                currentVT = num
+                if not vts[num].started then 
+                    local pid = table.maxn(process_table) + 1
+                    table.insert(process_table, pid, {coro=coroutine.create(nativeRun), path=loginProgram, started=false, filter=nil, args={...}, signals={}, user=0, vt=num, loggedin=false, parent=0, env=_ENV, term=vts[num], main=true}) 
+                    vts[num].started = true
+                end
+            elseif num == 12 then
+                _G._PID = nil
+                print("Kernel paused.")
+                _ENV.kill_kernel=function() 
+                    kernel_running = false
+                    --getfenv(2).exit()
+                end
+                print("Entering debugger.")
+                nativeRun(_ENV, "/rom/programs/lua.lua")
+                print("Resuming.")
             end
-        elseif num == 12 then
-            _G._PID = nil
-            print("Kernel paused.")
-            _ENV.kill_kernel=function() 
-                kernel_running = false
-                --getfenv(2).exit()
-            end
-            print("Entering debugger.")
-            nativeRun(_ENV, "/rom/programs/lua.lua")
-            print("Resuming.")
+        elseif e[2] == keys.c then
+            -- kill
+        elseif e[2] == keys.leftCtrl then
+            modifiers = bit.bor(modifiers, 1)
+        elseif e[2] == keys.leftAlt then
+            modifiers = bit.bor(modifiers, 2)
+        elseif e[2] == keys.leftShift then
+            modifiers = bit.bor(modifiers, 4)
+        end
+    elseif e[1] == "key_up" and keys.getName(e[2]) ~= nil then
+        if e[2] == keys.leftCtrl then
+            modifiers = bit.band(modifiers, bit.bnot(1))
+        elseif e[2] == keys.leftAlt then
+            modifiers = bit.band(modifiers, bit.bnot(2))
+        elseif e[2] == keys.leftShift then
+            modifiers = bit.band(modifiers, bit.bnot(4))
         end
     end
     local PID = 0
@@ -1757,7 +1781,8 @@ while kernel_running do
     end
     if eventFunctions[PID] ~= nil and eventFunctions[PID][e[1]] ~= nil and #eventFunctions[PID][e[1]] > 0 then
         local ef = table.remove(eventFunctions[PID][e[1]], 1)
-        for k = 2, e.n do if ef[k] ~= nil then e[k] = ef[k] end end
+        --print(textutils.serialize(ef))
+        for k,v in pairs(e) do if k > 1 and ef[k] ~= nil then e[k] = ef[k] end end
     end
     if e[1] == "kcall_get_process_table" then
         e[2] = deepcopy(process_table)
@@ -1899,6 +1924,7 @@ while kernel_running do
                         err, res = coroutine.resume(v.coro, unpack(e))
                         v.term = term.current()
                         term.redirect(nativeNative())
+                        thisVT = 1
                         --shell = orig_shell
                         --if v.env ~= nil then for r,n in pairs(v.env) do _G[r] = nil end end
                         v.user = _G._UID
@@ -1921,6 +1947,7 @@ while kernel_running do
                     err, res = coroutine.resume(v.coro, v.env, v.path, unpack(v.args))
                     v.term = term.current()
                     term.redirect(nativeNative())
+                    thisVT = 1
                     --_ENV.shell = orig_shell
                     --shell = orig_shell
                     --if v.env ~= nil then for r,n in pairs(v.env) do _G[r] = nil end end
@@ -1933,7 +1960,7 @@ while kernel_running do
             end
         end
         for k,v in pairs(delete) do 
-            if process_table[v.f].main then vts[process_table[v.f].vt].started = false end
+            if process_table[v.f] and process_table[v.f].main then vts[process_table[v.f].vt].started = false end
             killProcess(v.f)
         end
         --if not loggedin then break end
@@ -1964,4 +1991,13 @@ _G.users = nil
 _G.signals = nil
 currentVT = nil
 if shell ~= nil then shell.setPath(oldPath) end
---os.shutdown()
+
+end, ...)
+
+if not ok then
+    term.redirect(nativeTerminal)
+    printError("\nkernel panic at " .. err .. "\n\nA critical error has occurred in CCKernel2, and the computer was left in an unstable state. CraftOS must restart to recover functionality. Press any key to reboot.")
+    coroutine.yield()
+    coroutine.yield("key")
+    nativeReboot()
+end

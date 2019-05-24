@@ -1197,7 +1197,7 @@ function _G.read( _sReplaceChar, _tHistory, _fnComplete, _sDefault )
             recomplete()
             redraw()
 
-        elseif sEvent == "key_up" and param == keys.leftAlt then
+        elseif sEvent == "key_up" and param == keys.leftCtrl then
             bModifier = false
 
         elseif sEvent == "key" then
@@ -1323,7 +1323,7 @@ function _G.read( _sReplaceChar, _tHistory, _fnComplete, _sDefault )
                 -- Tab (accept autocomplete)
                 acceptCompletion()
 
-            elseif param == keys.leftAlt or param == keys.leftCtrl then
+            elseif param == keys.leftCtrl then
                 bModifier = true
 
             end
@@ -1732,7 +1732,7 @@ while kernel_running do
         e = {"kernel_stop"}
     end
     if e[1] == "key" and keys.getName(e[2]) ~= nil then
-        if string.find(keys.getName(e[2]), "f%d+") == 1 then
+        if string.find(keys.getName(e[2]), "f%d+") == 1 and bit.band(modifiers, 3) == 3 then
             local num = tonumber(string.sub(keys.getName(e[2]), 2))
             if num >= 1 and num <= 8 then
                 vts[currentVT].setVisible(false)

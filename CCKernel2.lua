@@ -976,16 +976,56 @@ function users.hasBlankPassword(uid) return textutils.unserializeFile("/etc/pass
 -- Debugger in error function
 local orig_error = error
 os.debug_enabled = false
-_ENV.error = function(message, level)
+local function getLine(filename, lineno)
+    local i = 1
+    local retval = ""
+    if type(filename) ~= "string" or (not orig_fs.exists(filename)) then return "" end
+    for line in io.lines(filename) do
+        if i == lineno then retval = line end
+        i=i+1
+    end
+    return retval
+end
+_G.error = function(message, level)
     if os.debug_enabled then 
         printError("Error caught: ", message)
         nativeRun(_ENV, "/rom/programs/lua.lua")
+    end
+    local m = ({pcall(function() orig_error("test", 3) end)})[2]
+    if _PID == nil or _PID == 0 then
+        local i = 4
+        local statuse = nil
+        local erre = "t"
+        local retval
+        retval = "panic: " .. message .. "\n"
+        while erre and erre ~= "CCKernel2.lua:29: " and erre ~= "" do
+            statuse, erre = pcall(function() orig_error("", i) end)
+            if not erre or erre == "CCKernel2.lua:29: " or erre ~= "" then break end
+            if string.find(erre, ":") ~= nil then
+                local filename = string.sub(erre, 1, string.find(erre, ":")-1)
+                filename = shell.resolveProgram(filename) or filename
+                if string.find(erre, ":", string.find(erre, ":")+1) == nil then
+                    retval = retval .. "    at " .. erre .. "\n"
+                else
+                    local lineno = tonumber(string.sub(erre, string.find(erre, ":")+1, string.find(erre, ":", string.find(erre, ":")+1)-1))
+                    --if i == 4 then lineno=lineno-1 end
+                    retval = retval .. "    at " .. erre .. string.trim(getLine(filename, lineno)) .. "\n"
+                end
+            else
+                retval = retval .. "    at " .. erre .. "\n"
+            end
+            i=i+1
+        end
+        local file = orig_fs.open("/var/logs/panic.log", "w")
+        file.write(retval)
+        file.close()
+        orig_error(retval, 0)
     end
     if level ~= nil then level = level + 1 end
     orig_error(message, level)
 end
 
--- **Cool** read function (allows linux-style password entry)
+-- **Cool** read function (allows linux-style password entry, Ctrl modifiers)
 local nextReadNil = false
 function _G.read( _sReplaceChar, _tHistory, _fnComplete, _sDefault )
     if nextReadNil then
@@ -1460,11 +1500,15 @@ local pidenv = {}
 local eventFunctions = {}
 function os.queueEvent(ev, ...) 
     local ef = {}
+    local args = {...}
     if eventFunctions[_G._PID] == nil then eventFunctions[_G._PID] = {} end
     if eventFunctions[_G._PID][ev] == nil then eventFunctions[_G._PID][ev] = {} end
-    if table.pack(...).n > 0 then for k,v in pairs({...}) do if hasFunction(v) then ef[k+2] = v end end end
+    if #args > 0 then for k,v in pairs(args) do if hasFunction(v) then
+        ef[k+2] = v
+        args[k] = false
+    end end end
     table.insert(eventFunctions[_G._PID][ev], ef)
-    nativeQueueEvent(ev, "CustomEvent,PID=" .. _G._PID, ...) 
+    nativeQueueEvent(ev, "CustomEvent,PID=" .. _G._PID, table.unpack(args)) 
 end
 function kernel.exec(path, env, ...) 
     if type(env) == "table" then 
@@ -1674,7 +1718,7 @@ function _G.read(...)
 end
 
 function os.pullEvent( sFilter )
-    local eventData = table.pack( os.pullEventRaw( sFilter ) )
+    local eventData = { os.pullEventRaw( sFilter ) }
     local ev = eventData[1]
     if ev == "terminate" then
         error( "Terminated", 0 )
@@ -1684,15 +1728,17 @@ function os.pullEvent( sFilter )
         --print(textutils.serialize(ef))
         for k,v in pairs(eventData) do if ef[k] ~= nil and k > 1 then eventData[k] = ef[k] end end
     end
-    return table.unpack( eventData, 1, eventData.n )
+    return table.unpack( eventData )
 end
 
 local firstProgram = shell.resolveProgram("init")
 local loginProgram = shell.resolveProgram("login")
 if singleUserMode then loginProgram = "/rom/programs/shell.lua" end
 
-fs.setPermissions(firstProgram, "*", bit.bor(fs.permissions.setuid, fs.permissions.read_execute))
-fs.setOwner(firstProgram, 0)
+if not fs.isReadOnly(firstProgram) then
+    fs.setPermissions(firstProgram, "*", bit.bor(fs.permissions.setuid, fs.permissions.read_execute))
+    fs.setOwner(firstProgram, 0)
+end
 
 local oldPath = shell.path()
 local kernel_running = true
@@ -1829,7 +1875,6 @@ while kernel_running do
         local func = table.remove(e, 1)
         local name = table.remove(e, 1) or "anonymous"
         local pid = table.maxn(process_table) + 1
-        kernel.log:debug(name)
         if func == nil then kernel.log:debug("Func is nil") end
         local env = pidenv[PID]
         if process_table[PID] == nil then error("Parent doesn't exist! " .. PID) end
@@ -1996,8 +2041,7 @@ end, ...)
 
 if not ok then
     term.redirect(nativeTerminal)
-    printError("\nkernel panic at " .. err .. "\n\nA critical error has occurred in CCKernel2, and the computer was left in an unstable state. CraftOS must restart to recover functionality. Press any key to reboot.")
-    coroutine.yield()
+    printError(err .. "\nA critical error has occurred in CCKernel2, and the computer was left in an unstable state. A traceback has been saved to /var/logs/panic.log. CraftOS must restart to recover functionality. Press any key to reboot.")
     coroutine.yield("key")
     nativeReboot()
 end

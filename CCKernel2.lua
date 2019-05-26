@@ -1867,7 +1867,7 @@ while kernel_running do
         local path = table.remove(e, 1)
         local env = pidenv[PID]
         local pid = table.maxn(process_table) + 1
-        table.insert(process_table, pid, {coro=coroutine.create(nativeRun), path=path, started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=process_table[PID].loggedin, parent=PID, term=vts[process_table[PID].vt], main=false})
+        table.insert(process_table, pid, {coro=coroutine.create(nativeRun), path=path, started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=process_table[PID].loggedin, parent=PID, term=process_table[PID].term, main=false})
         pidenv[PID] = nil
         kernel.send(PID, "process_started", pid)
     elseif e[1] == "kcall_fork_process" then
@@ -1878,7 +1878,7 @@ while kernel_running do
         if func == nil then kernel.log:debug("Func is nil") end
         local env = pidenv[PID]
         if process_table[PID] == nil then error("Parent doesn't exist! " .. PID) end
-        table.insert(process_table, pid, {coro=coroutine.create(func), path="["..name.."]", started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=process_table[PID].loggedin, parent=PID, term=vts[process_table[PID].vt], main=false})
+        table.insert(process_table, pid, {coro=coroutine.create(func), path="["..name.."]", started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=process_table[PID].loggedin, parent=PID, term=process_table[PID].term, main=false})
         kernel.send(PID, "process_started", pid)
     elseif e[1] == "kcall_open_pipe" then
         table.remove(e, 1)

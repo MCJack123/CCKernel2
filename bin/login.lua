@@ -11,8 +11,7 @@ while true do
     local uid = users.getUIDFromName(read())
     write("Password: ")
     local password = read("")
-    if not users.checkPassword(uid, password) then print("Login incorrect\n")
-    else
+    if not users.checkPassword(uid, password) then print("Login incorrect\n") else
         kernel.setProcessProperty(_PID, "loggedin", true)
         users.setuid(uid)
         local oldDir = shell.dir()

@@ -1,4 +1,4 @@
-if kernel == nil then print("This requires CCKernel2.") end
+if kernel == nil then error("This requires CCKernel2.") end
 
 CCLog.default.consoleLogLevel = CCLog.logLevels.warning
 

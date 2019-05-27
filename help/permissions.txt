@@ -1,0 +1,9 @@
+Permissions available:
+none, read, write,
+read_write, delete,
+read_delete, write_delete,
+deny_execute, execute,
+read_execute, write_execute,
+deny_delete, delete_execute,
+deny_write, deny_read,
+full, setuid

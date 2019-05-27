@@ -1,0 +1,13 @@
+All of the default fs functions have been overridden to add permission checks and mounts. If the current user doesn't have adequate permissions to access the files, an error will be thrown from the fs call.
+fs.linkDir(from, to)
+fs.unlinkDir(to)
+fs.getPermissions(path[, uid])
+fs.setPermissions(path[, uid], perm)
+fs.addPermissions(path[, uid], perm)
+fs.removePermissions(path, [ uid,] perm)
+fs.getOwner(path)
+fs.setOwner(path[, uid])
+fs.mount(path, mount)
+fs.unmount(path)
+fs.hasPermissions(path[, uid], perms)
+fs.mounts()

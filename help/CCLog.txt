@@ -1,0 +1,25 @@
+CCLog constructor: CCLog(name)
+
+Methods of the CCLog class:
+log:open()
+log:close()
+log:debug(text[, class[, lineno]])
+log:log(text[, class[, lineno]])
+log:info(text[, class[, lineno]])
+log:warn(text[, class[, lineno]])
+log:error(text[, class[, lineno]])
+log:critical(text[, class[, lineno]])
+log:traceback(errortext[, class[, lineno]])
+
+Properties of the CCLog class:
+log.showInDefaultLog
+log.shell
+
+Functions of the CCLog API:
+CCLog.createTerminal(log)
+
+Variables of the CCLog API:
+CCLog.logLevels {debug, info, warning, error, critical, traceback, silent}
+CCLog.logColors
+CCLog.default (type CCLog)
+

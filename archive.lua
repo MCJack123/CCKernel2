@@ -55,9 +55,10 @@ local function import(path)
     return retval
 end
 
-local function create(data)
+local function create(data, size)
     local retval = {}
     retval.data = data
+    retval.size = size
 
     function retval.write(path)
         local str = LibDeflate:CompressGzip(textutils.serialize(retval.data), compression_level and {level=compression_level})
@@ -209,7 +210,10 @@ function read(path)
         b = file.read()
     end
     file.close()
-    return create(textutils.unserialize(LibDeflate:DecompressGzip(retval)))
+    local gz = LibDeflate:DecompressGzip(retval)
+    os.queueEvent("nosleep")
+    os.pullEvent()
+    return create(textutils.unserialize(gz), string.len(gz))
 end
 
 function setCompressionLevel(level) compression_level = level end

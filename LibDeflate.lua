@@ -1822,6 +1822,9 @@ local function Deflate(configs, WriteBits, WriteString, FlushWriter, str
 		end
 	end
 
+	os.queueEvent("nosleep")
+    os.pullEvent()
+
 	while not is_last_block do
 		if not block_start then
 			block_start = 1
@@ -1983,10 +1986,12 @@ local function Deflate(configs, WriteBits, WriteString, FlushWriter, str
         end
 
         if _G.os and _G.os.pullEvent then -- ComputerCraft requires this for long-running processes
-            os.queueEvent("nosleep")
+			write(".")
+			os.queueEvent("nosleep")
             os.pullEvent()
         end
 	end
+	print()
 end
 
 --- The description to compression configuration table. <br>

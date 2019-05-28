@@ -16,7 +16,7 @@ CCWindow
 CCGraphics
 CCKit
 CCKitGlobals
-CCWindowRegistry?
+CCWindowRegistry
 ]]
 
 -- CCKitAmalgamated.lua
@@ -248,6 +248,7 @@ end
 local function redrawChar(win, x, y)
     win.setCursorPos(x+1, y+1)
     if win.screenBuffer[x][y] == nil then error("pixel not found at " .. x .. ", " .. y) end
+    if win.screenBuffer[x][y].transparent == true then return end
     if win.screenBuffer[x][y].useCharacter == true then win.blit(win.screenBuffer[x][y].character, cp(win.screenBuffer[x][y].fgColor), cp(win.screenBuffer[x][y].bgColor))
     else
         local char, flip = pixelToChar(win.screenBuffer[x][y].pixelCode)
@@ -339,6 +340,7 @@ end
 -- Returns: foreground color, background color
 function CCGraphics.setPixelColors(win, x, y, fgColor, bgColor)
     if not win.graphicsInitialized then error("graphics not initialized", 2) end
+    if x % 1 ~= 0 or y % 1 ~= 0 then error("coordinates must be integers, got (" .. x .. ", " .. y .. ")", 2) end
     if x > win.screenBuffer.termWidth or y > win.screenBuffer.termHeight then error("position out of bounds", 2) end
     if fgColor ~= nil then win.screenBuffer[x][y].fgColor = fgColor end
     if bgColor ~= nil then win.screenBuffer[x][y].bgColor = bgColor end
@@ -366,7 +368,7 @@ end
 function CCGraphics.setPixel(win, x, y)
     if not win.graphicsInitialized then error("graphics not initialized", 2) end
     if x > win.screenBuffer.width or y > win.screenBuffer.height then error("position out of bounds", 2) end
-    win.screenBuffer[x][y].useCharacter = false
+    win.screenBuffer[math.floor(x / 2)][math.floor(y / 3)].useCharacter = false
     win.screenBuffer[math.floor(x / 2)][math.floor(y / 3)].pixelCode = bit.bor(win.screenBuffer[math.floor(x / 2)][math.floor(y / 3)].pixelCode, 2^(2*(y % 3) + (x % 2)))
     redrawChar(win, math.floor(x / 2), math.floor(y / 3))
 end
@@ -378,7 +380,7 @@ end
 function CCGraphics.clearPixel(win, x, y)
     if not win.graphicsInitialized then error("graphics not initialized", 2) end
     if x > win.screenBuffer.width or y > win.screenBuffer.height then error("position out of bounds", 2) end
-    win.screenBuffer[x][y].useCharacter = false
+    win.screenBuffer[math.floor(x / 2)][math.floor(y / 3)].useCharacter = false
     win.screenBuffer[math.floor(x / 2)][math.floor(y / 3)].pixelCode = bit.band(win.screenBuffer[math.floor(x / 2)][math.floor(y / 3)].pixelCode, bit.bnot(2^(2*(y % 3) + (x % 2))))
     redrawChar(win, math.floor(x / 2), math.floor(y / 3))
 end
@@ -401,7 +403,7 @@ end
 -- Parameter: char = the character to print
 function CCGraphics.setCharacter(win, x, y, char)
     if not win.graphicsInitialized then error("graphics not initialized", 2) end
-    if win.screenBuffer[x] == nil or win.screenBuffer[x][y] == nil then error("position out of bounds", 2) end
+    if win.screenBuffer[x] == nil or win.screenBuffer[x][y] == nil then error("position out of bounds: " .. x .. ", " .. y, 2) end
     win.screenBuffer[x][y].useCharacter = true
     win.screenBuffer[x][y].character = char
     redrawChar(win, x, y)
@@ -496,10 +498,36 @@ function CCGraphics.drawCapture(win, x, y, image)
     if x + image.termWidth > win.screenBuffer.termWidth or y + image.termHeight > win.screenBuffer.termHeight then error("region out of bounds", 2) end
     for px=x,x+image.termWidth-1 do for py=y,y+image.termHeight-1 do 
         --print(px .. " " .. py)
-        if image[px-x][py-y] == nil then error("no data at " .. px-x .. ", " .. py-y) end
+        if image[px-x] == nil then error("no row at " .. px-x) end
+        if image[px-x][py-y] == nil then error("no data at " .. px-x .. ", " .. py-y, 2) end
         win.screenBuffer[px][py] = image[px-x][py-y]
     end end
     CCGraphics.redrawScreen(win)
+end
+
+-- Resizes the window.
+-- Parameter: win = the win to control
+-- Parameter: width = the new width (in term chars)
+-- Parameter: height = the new height (in term chars)
+function CCGraphics.resizeWindow(win, width, height)
+    win.screenBuffer.width = width * 2
+    win.screenBuffer.height = height * 3
+    win.screenBuffer.termWidth = width
+    win.screenBuffer.termHeight = height
+    for x=0,width-1 do
+        if win.screenBuffer[x] == nil then win.screenBuffer[x] = {} end
+        for y=0,height-1 do
+            --print("creating pixel " .. x .. ", " .. y)
+            if win.screenBuffer[x][y] == nil then
+                win.screenBuffer[x][y] = {}
+                win.screenBuffer[x][y].fgColor = colors.white -- Text color
+                win.screenBuffer[x][y].bgColor = colors.black -- Background color
+                win.screenBuffer[x][y].pixelCode = 0 -- Stores the data as a 6-bit integer (tl, tr, cl, cr, bl, br)
+                win.screenBuffer[x][y].useCharacter = false -- Whether to print a custom character
+                win.screenBuffer[x][y].character = " " -- Custom character
+            end
+        end
+    end
 end
 
 -- CCWindowRegistry.lua
@@ -510,23 +538,25 @@ end
 --
 -- Copyright (c) 2018 JackMacWindows.
 
+CCWindowRegistry = {}
+
 if _G.windowRegistry == nil then 
     _G.windowRegistry = {}
     _G.windowRegistry.zPos = {}
 end
 
-function registerApplication(appname)
+function CCWindowRegistry.registerApplication(appname)
     _G.windowRegistry[appname] = {}
     _G.windowRegistry.zPos[table.maxn(_G.windowRegistry.zPos)+1] = appname
 end
 
-function registerWindow(win)
+function CCWindowRegistry.registerWindow(win)
     if win.application == nil then error("Window does not have application", 2) end
     if _G.windowRegistry[win.application.name] == nil then error("Application " .. win.application.name .. " is not registered", 2) end
     table.insert(_G.windowRegistry[win.application.name], {name=win.name, x=win.frame.x, y=win.frame.y, width=win.frame.width, height=win.frame.height})
 end
 
-function deregisterApplication(appname)
+function CCWindowRegistry.deregisterApplication(appname)
     _G.windowRegistry[appname] = nil
     for k,v in pairs(_G.windowRegistry.zPos) do if v == appname then
         table.remove(_G.windowRegistry.zPos, k)
@@ -534,7 +564,7 @@ function deregisterApplication(appname)
     end end
 end
 
-function deregisterWindow(win)
+function CCWindowRegistry.deregisterWindow(win)
     if win.application == nil then error("Window does not have application", 2) end
     if _G.windowRegistry[win.application.name] == nil then return end
     for k,v in pairs(_G.windowRegistry[win.application.name]) do if v.name == win.name then
@@ -543,16 +573,16 @@ function deregisterWindow(win)
     end end
 end
 
-function setAppZ(appname, z)
+function CCWindowRegistry.setAppZ(appname, z)
     local n = 0
     for k,v in pairs(_G.windowRegistry.zPos) do if v == appname then n = k end end
     if n == 0 then error("Couldn't find application " .. appname, 2) end
     table.insert(_G.windowRegistry.zPos, z, table.remove(_G.windowRegistry.zPos, n))
 end
 
-function setAppTop(appname) setAppZ(appname, table.maxn(_G.windowRegistry.zPos)) end
+function CCWindowRegistry.setAppTop(appname) CCWindowRegistry.setAppZ(appname, table.maxn(_G.windowRegistry.zPos)) end
 
-function setWinZ(win, z)
+function CCWindowRegistry.setWinZ(win, z)
     if win.application == nil then error("Window does not have application", 2) end
     if _G.windowRegistry[win.application.name] == nil then error("Application " .. win.application.name .. " is not registered", 2) end
     local n = 0
@@ -561,13 +591,13 @@ function setWinZ(win, z)
     table.insert(_G.windowRegistry[win.application.name], z, table.remove(_G.windowRegistry[win.application.name], n))
 end
 
-function setWinTop(win) 
+function CCWindowRegistry.setWinTop(win) 
     if win.application == nil then error("Window does not have application", 2) end
     if _G.windowRegistry[win.application.name] == nil then error("Application " .. win.application.name .. " is not registered", 2) end
-    setWinZ(win, table.maxn(_G.windowRegistry[win.application.name]))
+    CCWindowRegistry.setWinZ(win, table.maxn(_G.windowRegistry[win.application.name]))
 end
 
-function moveWin(win, x, y)
+function CCWindowRegistry.moveWin(win, x, y)
     if win.application == nil then error("Window does not have application", 2) end
     if _G.windowRegistry[win.application.name] == nil then error("Application " .. win.application.name .. " is not registered", 2) end
     for k,v in pairs(_G.windowRegistry[win.application.name]) do if v.name == win.name then
@@ -577,7 +607,7 @@ function moveWin(win, x, y)
     end end
 end
 
-function resizeWin(win, x, y)
+function CCWindowRegistry.resizeWin(win, x, y)
     if win.application == nil then error("Window does not have application", 2) end
     if _G.windowRegistry[win.application.name] == nil then error("Application " .. win.application.name .. " is not registered", 2) end
     for k,v in pairs(_G.windowRegistry[win.application.name]) do if v.name == win.name then
@@ -587,24 +617,25 @@ function resizeWin(win, x, y)
     end end
 end
 
-function isAppOnTop(appname) return _G.windowRegistry.zPos[table.maxn(_G.windowRegistry.zPos)] == appname end 
+function CCWindowRegistry.isAppOnTop(appname) return _G.windowRegistry.zPos[table.maxn(_G.windowRegistry.zPos)] == appname end 
 
-function isWinOnTop(win) 
+function CCWindowRegistry.isWinOnTop(win) 
     if win.application == nil then error("Window does not have application", 2) end
     if _G.windowRegistry[win.application.name] == nil then error("Application " .. win.application.name .. " is not registered", 2) end
     return _G.windowRegistry[win.application.name][table.maxn(_G.windowRegistry[win.application.name])].name == win.name
 end
 
-function hitTest(win, px, py)
-    return not (px < win.x or py < win.y or px >= win.x + win.width or py >= win.y + win.height)
+function CCWindowRegistry.hitTest(win, px, py)
+    return win and win.frame and not (px < win.frame.x or py < win.frame.y or px >= win.frame.x + win.frame.width or py >= win.frame.y + win.frame.height)
 end
 
-function getAppZ(appname)
+function CCWindowRegistry.getAppZ(appname)
     for k,v in pairs(_G.windowRegistry.zPos) do if v == appname then return k end end
     return -1
 end
 
-function rayTest(win, px, py)
+function CCWindowRegistry.rayTest(win, px, py)
+    return CCWindowRegistry.hitTest(win, px, py) --[[
     if win.application == nil or _G.windowRegistry[win.application.name] == nil or win.frame == nil or px == nil or py == nil then return false end
     -- If the click isn't on the window then of course it didn't hit
     if px < win.frame.x or py < win.frame.y or px >= win.frame.x + win.frame.width or py >= win.frame.y + win.frame.height then return false end
@@ -624,7 +655,7 @@ function rayTest(win, px, py)
         for k,v in pairs(wins) do if finalwin == nil or getAppZ(v.app) > getAppZ(finalwin.app) then finalwin = v end end
         -- Check if win is the highest window
         return finalwin.win.name == win.name
-    end
+    end]]
 end
 
 -- CCEventHandler.lua
@@ -720,7 +751,7 @@ function CCApplication(name)
     retval.objectOrder = {}
     retval.applicationName = name
     retval.showName = false
-    if name ~= nil then retval.log = CCLog.CCLog(name)
+    if name ~= nil then retval.log = CCLog(name)
     else retval.log = CCLog.default end
     CCLog.default.logToConsole = false
     retval.log:open()
@@ -841,8 +872,6 @@ end
 -- for a window to be displayed on screen.
 --
 -- Copyright (c) 2018 JackMacWindows.
-
-local CCEventHandler = require("CCEventHandler")
 
 -- Constants for the colors of the window
 
@@ -1020,9 +1049,9 @@ function CCWindow(x, y, width, height)
         CCGraphics.setString(self.window, math.floor((self.frame.width - string.len(str)) / 2), 0, str)
     end
     function retval:setViewController(vc, app)
-        self.viewController = vc
         self.application = app
-        CCWindowRegistry.registerWindow(retval)
+        if self.viewController == nil then CCWindowRegistry.registerWindow(self) end
+        self.viewController = vc
         self.viewController:loadView(self, self.application)
         self.viewController:viewDidLoad()
         self.viewController.view:draw()
@@ -1146,6 +1175,79 @@ function CCViewController()
     return retval
 end
 
+-- CCControl.lua
+-- CCKit
+--
+-- This file defines the CCControl class, which is a base class for all controls.
+-- Controls can be interacted with and show content relating to the program
+-- state and any interactions done with the view.
+--
+-- Copyright (c) 2018 JackMacWindows.
+
+function CCControl(x, y, width, height)
+    local retval = multipleInheritance(CCView(x, y, width, height), CCEventHandler("CCControl"))
+    retval.hasEvents = true
+    retval.isEnabled = true
+    retval.isSelected = false
+    retval.isHighlighted = false
+    retval.action = nil
+    retval.actionObject = nil
+    function retval:setAction(func, obj)
+        self.action = func
+        self.actionObject = obj
+    end
+    function retval:setHighlighted(h)
+        self.isHighlighted = h
+        self:draw()
+    end
+    function retval:setEnabled(e)
+        self.isEnabled = e
+        self:draw()
+    end
+    function retval:onMouseDown(button, px, py)
+        if not CCWindowRegistry.rayTest(self.application.objects[self.parentWindowName], px, py) then return false end
+        local bx = self.frame.absoluteX
+        local by = self.frame.absoluteY
+        if px >= bx and py >= by and px < bx + self.frame.width and py < by + self.frame.height and button == 1 and self.action ~= nil and self.isEnabled then 
+            self.isSelected = true
+            self:draw()
+            return true
+        end
+        return false
+    end
+    function retval:onMouseUp(button, px, py)
+        --if not CCWindowRegistry.rayTest(self.application.objects[self.parentWindowName], px, py) then return false end
+        if self.isSelected and button == 1 then 
+            self.isSelected = false
+            self:draw()
+            self.action(self.actionObject)
+            return true
+        end
+        return false
+    end
+    function retval:onKeyDown(key, held)
+        if self.isHighlighted and key == keys.enter and self.isEnabled then 
+            self.isSelected = true
+            self:draw()
+            return true
+        end
+        return false
+    end
+    function retval:onKeyUp(key)
+        if self.isHighlighted and self.isSelected and key == keys.enter and self.isEnabled then
+            self.isSelected = false
+            self:draw()
+            self.action(self.actionObject)
+            return true
+        end
+        return false
+    end
+    retval:addEvent("key", retval.onKeyDown)
+    retval:addEvent("key_up", retval.onKeyUp)
+    retval:addEvent("mouse_click", retval.onMouseDown)
+    retval:addEvent("mouse_up", retval.onMouseUp)
+    return retval
+end
 
 -- CCLabel.lua
 -- CCKit
@@ -1177,35 +1279,24 @@ end
 -- Copyright (c) 2018 JackMacWindows.
 
 function CCButton(x, y, width, height)
-    local retval = CCView(x, y, width, height)
-    retval.name = string.random(8)
-    retval.textColor = colors.black
+    local retval = CCControl(x, y, width, height)
+    retval.textColor = CCKitGlobals.defaultTextColor
     retval.text = nil
-    retval.hasEvents = true
-    retval.action = nil
-    retval.backgroundColor = colors.lightGray
+    retval.backgroundColor = CCKitGlobals.buttonColor
     function retval:draw()
         if self.parentWindow ~= nil then
-            CCGraphics.drawBox(self.window, 0, 0, self.frame.width, self.frame.height, self.backgroundColor, self.textColor)
+            local textColor
+            local backgroundColor
+            if self.isHighlighted and self.isSelected then backgroundColor = CCKitGlobals.buttonHighlightedSelectedColor
+            elseif self.isHighlighted then backgroundColor = CCKitGlobals.buttonHighlightedColor
+            elseif self.isSelected then backgroundColor = CCKitGlobals.buttonSelectedColor
+            elseif not self.isEnabled then backgroundColor = CCKitGlobals.buttonDisabledColor
+            else backgroundColor = self.backgroundColor end
+            if self.isEnabled then textColor = self.textColor else textColor = CCKitGlobals.buttonDisabledTextColor end
+            CCGraphics.drawBox(self.window, 0, 0, self.frame.width, self.frame.height, backgroundColor, textColor)
             if retval.text ~= nil then CCGraphics.setString(self.window, math.floor((self.frame.width - string.len(self.text)) / 2), math.floor((self.frame.height - 1) / 2), self.text) end
             for k,v in pairs(self.subviews) do v:draw() end
         end
-    end
-    function retval:setAction(func, object)
-        self.action = func
-        self.actionObject = object
-    end
-    function retval:onClick(button, px, py)
-        --print("got click")
-        if self == nil then error("window is nil", 2) end
-        local bx = self.frame.absoluteX
-        local by = self.frame.absoluteY
-        if px >= bx and py >= by and px < bx + self.frame.width and py < by + self.frame.height and button == 1 and self.action ~= nil then 
-            --print("clicked button")
-            self.action(self.actionObject) 
-            return true
-        end
-        return false
     end
     function retval:setText(text)
         self.text = text
@@ -1215,7 +1306,6 @@ function CCButton(x, y, width, height)
         self.textColor = color
         self:draw()
     end
-    retval.events = {mouse_click = {func = retval.onClick, self = retval.name}}
     return retval
 end
 
@@ -1252,10 +1342,21 @@ function CCProgressBar(x, y, width)
     retval.backgroundColor = colors.lightGray
     retval.foregroundColor = colors.yellow
     retval.progress = 0.0
+    retval.indeterminate = false
     function retval:draw()
         if self.parentWindow ~= nil then
-            CCGraphics.drawLine(self.window, 0, 0, self.frame.width, false, self.backgroundColor)
-            CCGraphics.drawLine(self.window, 0, 0, math.floor(self.frame.width * self.progress), false, self.foregroundColor)
+            if self.indeterminate then
+                local i = 0
+                while i < self.frame.width do
+                    local c = self.backgroundColor
+                    if i / 2 == 0.0 then c = self.foregroundColor end
+                    CCGraphics.setPixelColors(self.window, i, 0, nil, c)
+                    i=i+1
+                end
+            else
+                CCGraphics.drawLine(self.window, 0, 0, self.frame.width, false, self.backgroundColor)
+                CCGraphics.drawLine(self.window, 0, 0, math.floor(self.frame.width * self.progress), false, self.foregroundColor)
+            end
             for k,v in pairs(self.subviews) do v:draw() end
         end
     end
@@ -1264,6 +1365,303 @@ function CCProgressBar(x, y, width)
         self.progress = progress
         self:draw()
     end
+    function retval:setIndeterminate(id)
+        self.indeterminate = id
+        self:draw()
+    end
+    return retval
+end
+
+-- CCCheckbox.lua
+-- CCKit
+--
+-- This file creates the CCCheckbox class, which provides a binary toggleable
+-- button for selecting states.
+--
+-- Copyright (c) 2018 JackMacWindows.
+
+function CCCheckbox(x, y, text)
+    local size = 1
+    if type(text) == "string" then size = string.len(text) + 2 end
+    local retval = CCControl(x, y, size, 1)
+    retval.isOn = false
+    retval.text = text
+    retval.textColor = CCKitGlobals.defaultTextColor
+    retval.backgroundColor = CCKitGlobals.buttonColor
+    function retval:setOn(value)
+        self.isOn = value
+        self:draw()
+    end
+    function retval:setTextColor(color)
+        self.textColor = color
+        self:draw()
+    end
+    function retval:draw()
+        if self.parentWindow ~= nil then
+            local textColor
+            local backgroundColor
+            if self.isOn and self.isSelected then backgroundColor = CCKitGlobals.buttonHighlightedSelectedColor
+            elseif self.isOn then backgroundColor = CCKitGlobals.buttonHighlightedColor
+            elseif self.isSelected then backgroundColor = CCKitGlobals.buttonSelectedColor
+            elseif not self.isEnabled then backgroundColor = CCKitGlobals.buttonDisabledColor
+            else backgroundColor = self.backgroundColor end
+            if self.isEnabled then textColor = self.textColor else textColor = CCKitGlobals.buttonDisabledTextColor end
+            CCGraphics.drawBox(self.window, 0, 0, 1, 1, backgroundColor, textColor)
+            if retval.isOn then CCGraphics.setCharacter(self.window, 0, 0, "x")
+            else CCGraphics.clearCharacter(self.window, 0, 0) end
+            if retval.text ~= nil then 
+                CCGraphics.drawBox(self.window, 1, 0, string.len(self.text) + 1, 1, CCKitGlobals.windowBackgroundColor, textColor)
+                CCGraphics.setString(self.window, 2, 0, self.text)
+            end
+            for k,v in pairs(self.subviews) do v:draw() end
+        end
+    end
+    function retval:action()
+        self:setOn(not self.isOn)
+        os.queueEvent("checkbox_toggled", self.name, self.isOn)
+    end
+    retval:setAction(retval.action, retval)
+    return retval
+end
+
+-- CCTextField.lua
+-- CCKit
+--
+-- This file creates the CCTextField class, which allows the user to type text.
+--
+-- Copyright (c) 2018 JackMacWindows.
+
+function CCTextField(x, y, width)
+    local retval = multipleInheritance(CCView(x, y, width, 1), CCEventHandler("CCTextField"))
+    retval.text = ""
+    retval.isSelected = false
+    retval.isEnabled = true
+    retval.cursorOffset = 0 -- later
+    retval.backgroundColor = colors.lightGray
+    retval.textColor = CCKitGlobals.defaultTextColor
+    retval.placeholderText = nil
+    retval.textReplacement = nil
+    function retval:setTextColor(color)
+        self.textColor = color
+        self:draw()
+    end
+    function retval:setEnabled(e)
+        self.isEnabled = e
+        self:draw()
+    end
+    function retval:setPlaceholder(text)
+        self.placeholderText = text
+        self:draw()
+    end
+    function retval:draw()
+        if self.parentWindow ~= nil then
+            CCGraphics.drawBox(self.window, 0, 0, self.frame.width, self.frame.height, self.backgroundColor, self.textColor)
+            local text = self.text
+            if string.len(text) >= self.frame.width then text = string.sub(text, string.len(text)-self.frame.width+2)
+            elseif string.len(text) == 0 and self.placeholderText ~= nil and not self.isSelected then
+                text = self.placeholderText
+                CCGraphics.drawBox(self.window, 0, 0, self.frame.width, self.frame.height, self.backgroundColor, colors.gray)
+            end
+            if self.isSelected then text = text .. "_" end
+            CCGraphics.setString(self.window, 0, 0, (self.textReplacement and text ~= self.placeholderText) and string.rep(string.sub(self.textReplacement, 1, 1), string.len(text) - 1) .. (self.isSelected and "_" or "") or text)
+            for k,v in pairs(self.subviews) do v:draw() end
+        end
+    end
+    function retval:onClick(button, px, py)
+        if not CCWindowRegistry.rayTest(self.application.objects[self.parentWindowName], px, py) then return false end
+        if button == 1 then
+            self.isSelected = px >= self.frame.absoluteX and py == self.frame.absoluteY and px < self.frame.absoluteX + self.frame.width and self.isEnabled
+            self:draw()
+            return self.isSelected
+        end
+        return false
+    end
+    function retval:onKey(key, held)
+        if key == keys.backspace and self.isSelected and self.isEnabled then
+            self.text = string.sub(self.text, 1, string.len(self.text)-1)
+            self:draw()
+            return true
+        end
+        return false
+    end
+    function retval:onChar(ch)
+        if self.isSelected and self.isEnabled then
+            self.text = self.text .. ch
+            self:draw()
+            return true
+        end
+        return false
+    end
+    retval:addEvent("mouse_click", retval.onClick)
+    retval:addEvent("key", retval.onKey)
+    retval:addEvent("char", retval.onChar)
+    return retval
+end
+
+-- CCScrollView.lua
+-- CCKit
+--
+-- This creates the CCScrollView class, which is used to display subviews
+-- that would otherwise be too tall for the area.
+--
+-- Copyright (c) 2018 JackMacWindows.
+
+local function CCScrollBar(x, y, height) -- may make this public later
+    local retval = CCControl(x, y, 1, height)
+    retval.class = "CCScrollBar"
+    retval.buttonColor = CCKitGlobals.buttonColor
+    retval.sliderValue = 0
+    function retval:setValue(value)
+        self.sliderValue = value
+        self:draw()
+    end
+    function retval:onMouseDown(button, px, py)
+        if not CCWindowRegistry.rayTest(self.application.objects[self.parentWindowName], px, py) then return false end
+        local bx = self.frame.absoluteX
+        local by = self.frame.absoluteY
+        if px >= bx and py >= by and px < bx + self.frame.width and py < by + self.frame.height and button == 1 and self.isEnabled then 
+            self.isSelected = true
+            self:onDrag(button, px, py)
+            return true
+        end
+        return false
+    end
+    function retval:onDrag(button, px, py)
+        --if not CCWindowRegistry.rayTest(self.application.objects[self.parentWindowName], px, py) then return false end
+        if self.isSelected and button == 1 then
+            if py < self.frame.absoluteY then self.sliderValue = 0
+            elseif py > self.frame.absoluteY + self.frame.height - 1 then self.sliderValue = self.frame.height - 1
+            else self.sliderValue = py - self.frame.absoluteY end
+            self:draw()
+            os.queueEvent("slider_dragged", self.name, self.sliderValue)
+            return true
+        end
+        return false
+    end
+    function retval:draw()
+        if self.parentWindow ~= nil then
+            CCGraphics.drawLine(self.window, 0, 0, self.frame.height, true, self.backgroundColor)
+            if self.isSelected then CCGraphics.setPixelColors(self.window, 0, self.sliderValue, CCKitGlobals.buttonSelectedColor, CCKitGlobals.buttonSelectedColor)
+            else CCGraphics.setPixelColors(self.window, 0, self.sliderValue, self.buttonColor, self.buttonColor) end
+            for k,v in pairs(self.subviews) do v:draw() end
+        end
+    end
+    retval:setAction(function() return end, self)
+    retval:addEvent("mouse_click", retval.onMouseDown)
+    retval:addEvent("mouse_drag", retval.onDrag)
+    return retval
+end
+
+local function getWindowCapture(view)
+    local image = CCGraphics.captureRegion(view.window, 0, 0, view.frame.width, view.frame.height)
+    for k,v in pairs(view.subviews) do
+        local subimage = getWindowCapture(v)
+        for x,r in pairs(subimage) do if type(x) ~= "string" then 
+            if image[x+v.frame.x] == nil then image[x+v.frame.x] = {} end
+            for y,p in pairs(r) do image[x+v.frame.x][y+v.frame.y] = p end 
+        end end
+    end
+    return image
+end
+
+local function resizeImage(image, x, y, width, height, default)
+    local retval = {width = width * 2, height = height * 3, termWidth = width, termHeight = height}
+    for px=0,width-1 do
+        if retval[px] == nil then retval[px] = {} end
+        for py=0,height-1 do
+            --print("creating pixel " .. x .. ", " .. y)
+            if retval[px][py] == nil then
+                retval[px][py] = {}
+                retval[px][py].fgColor = default -- Text color
+                retval[px][py].bgColor = default -- Background color
+                retval[px][py].pixelCode = 0 -- Stores the data as a 6-bit integer (tl, tr, cl, cr, bl, br)
+                retval[px][py].useCharacter = false -- Whether to print a custom character
+                retval[px][py].character = " " -- Custom character
+            end
+        end
+    end
+    for dx,r in pairs(image) do if type(dx) ~= "string" then 
+        if retval[dx-x] == nil then retval[dx-x] = {} end
+        for dy,p in pairs(r) do retval[dx-x][dy-y] = p end
+    end end
+    return retval
+end
+
+function math.round(num) if num % 1 < 0.5 then return math.floor(num) else return math.ceil(num) end end
+
+function CCScrollView(x, y, width, height, innerHeight)
+    local retval = multipleInheritance(CCView(x, y, width, height), CCEventHandler("CCScrollView"))
+    retval.contentHeight = innerHeight
+    retval.currentOffset = 0
+    retval.renderWindow = window.create(term.native(), 1, 1, width-1, innerHeight, false)
+    retval.scrollBar = CCScrollBar(width-1, 0, height)
+    retval.lastAbsolute = 0
+    CCGraphics.initGraphics(retval.renderWindow)
+    function retval:draw() -- won't work with any views that don't use CCGraphics (please use CCGraphics)
+        if self.parentWindow ~= nil then
+            self.scrollBar.sliderValue = math.round(self.currentOffset * (self.frame.height / (self.contentHeight - self.frame.height + 1)))
+            CCGraphics.drawBox(self.window, 0, 0, self.frame.width, self.frame.height, self.backgroundColor)
+            --self.renderWindow.setVisible(true)
+            CCGraphics.drawBox(self.renderWindow, 0, 0, self.frame.width-1, self.contentHeight, self.backgroundColor)
+            local image = CCGraphics.captureRegion(self.renderWindow, 0, 0, self.frame.width-1, self.contentHeight)
+            for k,v in pairs(self.subviews) do 
+                v:updateAbsolutes(0, (self.frame.absoluteY - self.currentOffset) - self.lastAbsolute)
+                v:draw()
+                if v.class ~= "CCScrollBar" then
+                    local subimage = getWindowCapture(v)
+                    for x,r in pairs(subimage) do if type(x) ~= "string" then 
+                        if image[x+v.frame.x] == nil then image[x+v.frame.x] = {} end
+                        for y,p in pairs(r) do image[x+v.frame.x][y+v.frame.y] = p end 
+                    end end
+                end
+            end
+            image = resizeImage(image, 0, self.currentOffset, self.frame.width-1, self.frame.height, self.backgroundColor)
+            --self.application.log:debug(textutils.serialize(image))
+            CCGraphics.drawCapture(self.window, 0, 0, image)
+            self.scrollBar:draw()
+            self.lastAbsolute = self.frame.absoluteY - self.currentOffset
+            --self.renderWindow.setVisible(false)
+        end
+    end
+    function retval:scroll(direction, px, py)
+        if not CCWindowRegistry.rayTest(self.application.objects[self.parentWindowName], px, py) then return false end
+        if px >= self.frame.absoluteX and py >= self.frame.absoluteY and px < self.frame.absoluteX + self.frame.width and py < self.frame.absoluteY + self.frame.height and self.currentOffset + direction <= self.contentHeight - self.frame.height and self.currentOffset + direction >= 0 then
+            self.currentOffset = self.currentOffset + direction
+            self:draw()
+            return true
+        end
+        return false
+    end
+    function retval:addSubview(view)
+        if self.application == nil then error("Parent view must be added before subviews", 2) end
+        if view == nil then self.application.log:error("Cannot add nil subview", 2) end
+        if view.hasEvents then self.application:registerObject(view, view.name, false) end
+        if view.class == "CCScrollBar" then view:setParent(self.window, self.application, self.parentWindowName, self.frame.absoluteX, self.frame.absoluteY)
+        else view:setParent(self.renderWindow, self.application, self.parentWindowName, self.frame.absoluteX, self.frame.absoluteY - self.currentOffset) end
+        table.insert(self.subviews, view)
+    end
+    function retval:setParent(parent, application, name, absoluteX, absoluteY)
+        self.parentWindow = parent
+        self.parentWindowName = name
+        self.application = application
+        self.frame.absoluteX = absoluteX + self.frame.x
+        self.frame.absoluteY = absoluteY + self.frame.y
+        self.lastAbsolute = self.frame.absoluteY - self.currentOffset
+        self.window = window.create(self.parentWindow, self.frame.x+1, self.frame.y+1, self.frame.width, self.frame.height)
+        CCGraphics.initGraphics(self.window)
+        self:addSubview(self.scrollBar)
+    end
+    function retval:didScroll(name, value)
+        self.application.log:debug("Slider dragged")
+        if name == self.scrollBar.name then
+            self.currentOffset = math.round(((self.contentHeight - self.frame.height + 1) / self.frame.height) * value)
+            self:draw()
+            return true
+        end
+        return false
+    end
+    retval:addEvent("mouse_scroll", retval.scroll)
+    retval:addEvent("slider_dragged", retval.didScroll)
     return retval
 end
 
@@ -1300,7 +1698,7 @@ function CCLineBreakMode.divideText(text, width, mode)
         local lines = string.split(text, "\n")
         for k,line in pairs(lines) do table.insert(retval, string.sub(line, 1, width)) end
     else
-        local words = string.split(text, "[%w%p]+")
+        local words = string.split(text, "[%w%p\n]+")
         local line = ""
         for k,word in pairs(words) do
             if string.len(line) + string.len(word) >= width then
@@ -1308,6 +1706,13 @@ function CCLineBreakMode.divideText(text, width, mode)
                 line = ""
             end
             line = line .. word .. " "
+            if string.find(line, "\n") then
+                local nextLine = string.sub(line, 1, string.find(line, "\n") - 1, nil)
+                if string.len(nextLine) > width then error("wtf2: " .. nextLine) end
+                table.insert(retval, nextLine)
+                line = string.sub(line, string.find(line, "\n") + 1, nil)
+                if string.len(line) >= width then error("wtf: " .. line) end
+            end
         end
         table.insert(retval, line)
     end
@@ -1323,7 +1728,7 @@ end
 
 function CCTextView(x, y, width, height)
     local retval = CCView(x, y, width, height)
-    retval.textColor = colors.black
+    retval.textColor = CCKitGlobals.defaultTextColor
     retval.text = ""
     retval.lineBreakMode = CCLineBreakMode.byWordWrapping
     function retval:draw()
@@ -1401,10 +1806,13 @@ end
 --
 -- Copyright (c) 2018 JackMacWindows.
 
-function CCMain(initX, initY, initWidth, initHeight, title, vcClass, backgroundColor)
+function CCMain(initX, initY, initWidth, initHeight, title, vcClass, backgroundColor, appName, showName)
     backgroundColor = backgroundColor or colors.black
-    local app = CCApplication()
+    local name = title
+    if appName ~= nil then name = appName end
+    local app = CCApplication(name)
     app:setBackgroundColor(backgroundColor)
+    app.showName = showName or false
     local win = CCWindow(initX, initY, initWidth, initHeight)
     win:setTitle(title)
     local vc = vcClass()
@@ -1412,7 +1820,13 @@ function CCMain(initX, initY, initWidth, initHeight, title, vcClass, backgroundC
     app:registerObject(win, win.name)
     app.isApplicationRunning = true
     term.setCursorBlink(false)
-    app:runLoop()
+    local ok, err = pcall(function() app:runLoop() end)
+    CCWindowRegistry.deregisterApplication(app.name)
+    if not ok then
+        printError(err)
+        return
+    end
+    while table.maxn(_G.windowRegistry.zPos) > 0 do coroutine.yield() end
     term.setBackgroundColor(colors.black)
     term.clear()
     term.setCursorPos(1, 1)

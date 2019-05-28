@@ -187,6 +187,7 @@ if term.setGraphicsMode ~= nil then
 end
 
 CCLog.default.term = vts[1]
+term.redirect(vts[1])
 
 -- FS rewrite
 -- Permissions will be in a table with the key being the user ID and the value being a bitmask of the permissions allowed for that user.

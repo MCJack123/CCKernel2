@@ -1,5 +1,5 @@
 -- Archive library
-if kernel then os.loadAPI("LibDeflate") else _G.LibDeflate = dofile("LibDeflate.lua") end
+if not LibDeflate then if kernel then os.loadAPI("LibDeflate") else _G.LibDeflate = dofile(shell and shell.resolveProgram("LibDeflate") or "LibDeflate.lua") end end
 
 compression_level = nil -- compression level (nil for default)
 
@@ -67,6 +67,38 @@ local function create(data, size)
         file.close()
     end
 
+    function retval.readFile(realPath, pkgPath)
+        local realFile = fs.open(realPath, "r")
+        if not realFile then error(realFile .. ": File not found", 2) end
+        retval.makeDir(fs.getDir(pkgPath))
+        local dir = getComponent(retval.data, split(fs.getDir(pkgPath), "/"))
+        if type(dir) ~= "table" then error(fs.getDir(pkgPath) .. ": Directory not found", 2) end
+        dir[fs.getName(pkgPath)] = realFile.readAll()
+        realFile.close()
+    end
+
+    function retval.readDir(realPath, pkgPath)
+        if not fs.isDir(realPath) then error(realPath .. ": Not a directory", 2) end
+        retval.makeDir(fs.getDir(pkgPath))
+        local dir = getComponent(retval.data, split(fs.getDir(pkgPath), "/"))
+        dir[fs.getName(pkgPath)] = import(realPath)
+    end
+
+    function retval.writeFile(pkgPath, realPath)
+        local pkgFile = getComponent(retval.data, split(pkgPath, "/"))
+        if type(pkgFile) ~= "string" then error(pkgPath .. ": File not found", 2) end
+        fs.makeDir(fs.getDir(realPath))
+        local realFile = fs.open(realPath, "w")
+        realFile.write(pkgFile)
+        realFile.close()
+    end
+
+    function retval.writeDir(pkgPath, realPath)
+        local dir = getComponent(retval.data, split(pkgPath, "/"))
+        if type(dir) ~= "table" then error(pkgPath .. ": Directory not found", 2) end
+        extract(dir, realPath)
+    end
+
     function retval.extract(path) extract(retval.data, path) end
 
     function retval.list(path)
@@ -102,7 +134,13 @@ local function create(data, size)
     function retval.makeDir(path)
         if string.sub(path, 1, 1) == "/" then path = string.sub(path, 2) end
         local dir = getComponent(retval.data, split(fs.getDir(path), "/"))
-        if type(dir) ~= "table" then error(fs.getDir(path) .. ": Directory not found", 2) end
+        if type(dir) ~= "table" then 
+            retval.makeDir(fs.getDir(path))
+            dir = getComponent(retval.data, split(fs.getDir(path), "/"))
+            if type(dir) ~= "table" then error(fs.getDir(path) .. ": Directory not found", 2) end
+        end
+        if type(dir[fs.getName(path)]) == "table" then return
+        elseif type(dir[fs.getName(path)]) == "file" then error(path .. ": File already exists") end
         dir[fs.getName(path)] = {}
     end
 
@@ -132,8 +170,8 @@ local function create(data, size)
     function retval.open(path, mode)
         if string.sub(path, 1, 1) == "/" then path = string.sub(path, 2) end
         local file = getComponent(retval.data, split(path, "/"))
-        if type(file) ~= "string" and not string.find(mode, "a") then error(path .. ": File not found", 2) end
-        if string.find(mode, "a") then file = "" end
+        if type(file) ~= "string" and not string.find(mode, "w") then error(path .. ": File not found", 2) end
+        if string.find(mode, "w") then file = "" end
         local retval = {close = function() if retval.flush ~= nil then retval.flush() end end}
         local pos = string.find(mode, "a") and string.len(file) or 1
         if string.find(mode, "b") then
@@ -203,6 +241,7 @@ function load(path) return create(import(path)) end
 
 function read(path)
     local file = fs.open(path, "rb")
+    if not file then error(path .. ": File not found", 2) end
     local retval = ""
     local b = file.read()
     while b ~= nil do

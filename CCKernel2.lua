@@ -394,6 +394,16 @@ local devfs = {
         if deviceFiles[path] == nil then return permissions.none end
         return get_permissions(deviceFiles[path].permissions, uid)
     end,
+    readAllPermissions = function(path) 
+        if path == "/" or path == "" then return {["*"] = permissions.read} end
+        if string.sub(path, 1, 1) == "/" then path = string.sub(path, 2) end
+        if deviceFiles[path] == nil then return {["*"] = permissions.none} end
+        return deviceFiles[path].permissions 
+    end,
+    deleteAllPermissions = function() 
+        if string.sub(path, 1, 1) == "/" then path = string.sub(path, 2) end
+        error("/dev/" .. path .. ": Access denied", 3)
+    end,
     setPermissions = function(path)
         if string.sub(path, 1, 1) == "/" then path = string.sub(path, 2) end
         error("/dev/" .. path .. ": Access denied", 3)
@@ -456,6 +466,8 @@ function fs.linkDir(from, to)
         exists = function(path) return fs.exists(combine(path)) end,
         isDir = function(path) return fs.isDir(combine(path)) end,
         getPermissions = function(path, uid) return fs.getPermissions(combine(path), uid) end,
+        readAllPermissions = function(path) return fs.readAllPermissions(combine(path)) end,
+        deleteAllPermissions = function(path) return fs.deleteAllPermissions(combine(path)) end,
         setPermissions = function(path, uid, perm) return fs.setPermissions(combine(path), uid, perm) end,
         getSize = function(path) return fs.getSize(combine(path)) end,
         getFreeSpace = function(path) return fs.getFreeSpace(combine(path)) end,
@@ -476,6 +488,8 @@ local function linkHome()
         exists = function(path) return fs.exists(combine(path)) end,
         isDir = function(path) return fs.isDir(combine(path)) end,
         getPermissions = function(path, uid) return fs.getPermissions(combine(path), uid) end,
+        readAllPermissions = function(path) return fs.readAllPermissions(combine(path)) end,
+        deleteAllPermissions = function(path) return fs.deleteAllPermissions(combine(path)) end,
         setPermissions = function(path, uid, perm) return fs.setPermissions(combine(path), uid, perm) end,
         getSize = function(path) return fs.getSize(combine(path)) end,
         getFreeSpace = function(path) return fs.getFreeSpace(combine(path)) end,
@@ -552,7 +566,7 @@ function orig_fs.setPermissions(path, uid, perm)
     local perms = textutils.unserializeFile(orig_fs.getDir(path) .. "/.permissions")
     if perms[orig_fs.getName(path)] == nil then perms[orig_fs.getName(path)] = {["*"] = default, [uid] = perm}
     else
-        if perms[orig_fs.getName(path)].owner ~= nil and perms[orig_fs.getName(path)].owner ~= _G._UID then error(path .. ": Access denied", 3) end
+        if perms[orig_fs.getName(path)].owner ~= nil and perms[orig_fs.getName(path)].owner ~= _G._UID and _G._UID ~= 0 then error(path .. ": Access denied", 3) end
         perms[orig_fs.getName(path)][uid] = perm 
     end
     textutils.serializeFile(orig_fs.getDir(path) .. "/.permissions", perms)
@@ -577,7 +591,7 @@ end
 
 function orig_fs.setOwner(path, uid)
     if type(path) ~= "string" then error("bad argument #1 (string expected, got " .. type(path) .. ")", 3) end
-    if type(uid) ~= "string" and type(uid) ~= "number" then error("bad argument #2 (number or string expected, got " .. type(path) .. ")", 3) end
+    if type(uid) ~= "string" and type(uid) ~= "number" then error("bad argument #2 (number or string expected, got " .. type(path) .. ")", 2) end
     if not orig_fs.exists(path) then error(path .. ": No such file", 3) end
     if orig_fs.getDrive(path) == "rom" then error(path .. ": Access denied", 3) end
     if not orig_fs.exists(orig_fs.getDir(path) .. "/.permissions") then 
@@ -587,8 +601,41 @@ function orig_fs.setOwner(path, uid)
     local perms = textutils.unserializeFile(orig_fs.getDir(path) .. "/.permissions")
     if perms[orig_fs.getName(path)] == nil then perms[orig_fs.getName(path)] = {["*"] = default, owner = uid}
     else
-        if perms[orig_fs.getName(path)].owner ~= nil and perms[orig_fs.getName(path)].owner ~= _G._UID then error(path .. ": Access denied", 3) end
+        if perms[orig_fs.getName(path)].owner ~= nil and perms[orig_fs.getName(path)].owner ~= _G._UID and _G._UID ~= 0 then error(path .. ": Access denied", 3) end
         perms[orig_fs.getName(path)].owner = uid
+    end
+    textutils.serializeFile(orig_fs.getDir(path) .. "/.permissions", perms)
+end
+
+function orig_fs.readAllPermissions(path)
+    if type(path) ~= "string" then error("bad argument #1 (string expected, got " .. type(path) .. ")", 3) end
+    if orig_fs.getDrive(path) == "rom" then return {["*"] = permissions.read_execute} end
+    if not orig_fs.exists(path) then
+        if not orig_fs.exists(fs.getDir(path)) then return {["*"] = permissions.none}
+        elseif not fs.hasPermissions(fs.getDir(path), uid, permissions.write) then return {["*"] = permissions.none}
+        else return {["*"] = permissions.write} end
+    end
+    local default = orig_fs.isReadOnly(path) and permissions.read or permissions.full
+    if not orig_fs.exists(orig_fs.getDir(path) .. "/.permissions") then 
+        if create then textutils.serializeFile(orig_fs.getDir(path) .. "/.permissions", {[orig_fs.getName(path)] = {["*"] = default}}) end
+        return {["*"] = default}
+    end
+    local perms = textutils.unserializeFile(orig_fs.getDir(path) .. "/.permissions")
+    return perms[fs.getName(path)] or {["*"] = 15}
+end
+
+function orig_fs.deleteAllPermissions(path)
+    if type(path) ~= "string" then error("bad argument #1 (string expected, got " .. type(path) .. ")", 3) end
+    if not orig_fs.exists(path) then error(path .. ": No such file", 3) end
+    if orig_fs.getDrive(path) == "rom" then error(path .. ": Access denied", 3) end
+    if not orig_fs.exists(orig_fs.getDir(path) .. "/.permissions") then 
+        textutils.serializeFile(orig_fs.getDir(path) .. "/.permissions", {})
+        return
+    end
+    local perms = textutils.unserializeFile(orig_fs.getDir(path) .. "/.permissions")
+    if perms[orig_fs.getName(path)] == nil then return else
+        if perms[orig_fs.getName(path)].owner ~= nil and perms[orig_fs.getName(path)].owner ~= _G._UID and _G._UID ~= 0 then error(path .. ": Access denied", 3) end
+        perms[orig_fs.getName(path)][uid] = nil 
     end
     textutils.serializeFile(orig_fs.getDir(path) .. "/.permissions", perms)
 end
@@ -626,6 +673,11 @@ function fs.getPermissions(path, uid, create)
     return m.getPermissions(p, uid, create)
 end
 
+function fs.readAllPermissions(path)
+    local m, p = getMount(path)
+    return m.readAllPermissions(path)
+end
+
 function fs.setPermissions(path, uid, perm)
     local m, p = getMount(path)
     if uid == nil then uid = getuid() end
@@ -642,6 +694,11 @@ function fs.removePermissions(path, uid, perm)
     local m, p = getMount(path)
     if uid == nil then uid = getuid() end
     return m.setPermissions(p, uid, bit.band(m.getPermissions(p, uid), bit.bnot(perm)))
+end
+
+function fs.deleteAllPermissions(path)
+    local m, p = getMount(path)
+    return m.deleteAllPermissions(path)
 end
 
 function fs.getOwner(path)
@@ -672,12 +729,17 @@ function fs.getFreeSpace(path)
     return m.getFreeSpace()
 end
 
+local function copyPermissions(from, to)
+    local perms = fs.readAllPermissions(from)
+    for k,v in pairs(perms) do if k == "owner" then fs.setOwner(to, v) else fs.setPermissions(to, k, v) end end
+end
+
 function fs.makeDir(path)
     local m, p = getMount(path)
     if fs.getDir(p) ~= "/" and fs.getDir(p) ~= "" and not fs.isDir(fs.getDir(p)) then error(fs.getDir(p) .. ": Directory not found", 2) end
     if fs.getDir(p) ~= "/" and fs.getDir(p) ~= "" and not bit.bmask(m.getPermissions(fs.getDir(p), getuid()), permissions.write) then error(path .. ": Access denied", 2) end
     m.makeDir(p)
-    m.setPermissions(p, "*", fs.getPermissions(fs.getDir(path), "*"))
+    copyPermissions(fs.getDir(path), path)
 end
 
 function fs.move(path, toPath)
@@ -685,12 +747,7 @@ function fs.move(path, toPath)
     if not bit.bmask(m.getPermissions(p, getuid()), permissions.delete) or not bit.bmask(m.getPermissions(p, getuid()), permissions.read) then error(path .. ": Access denied", 2) end
     if not bit.bmask(fs.getPermissions(toPath, getuid()), permissions.write) then error(toPath .. ": Access denied", 2) end
     m.move(p, toPath)
-    local inperms = textutils.unserializeFile(fs.getDir(path) .. "/.permissions")
-    local outperms = textutils.unserializeFile(fs.getDir(toPath) .. "/.permissions")
-    outperms[fs.getName(toPath)] = inperms[fs.getName(path)]
-    inperms[fs.getName(path)] = nil
-    textutils.serializeFile(fs.getDir(toPath) .. "/.permissions", outperms)
-    textutils.serializeFile(fs.getDir(path) .. "/.permissions", inperms)
+    copyPermissions(path, toPath)
 end
 
 function fs.copy(path, toPath)
@@ -698,19 +755,14 @@ function fs.copy(path, toPath)
     if not bit.bmask(m.getPermissions(p, getuid()), permissions.read) then error(path .. ": Access denied", 2) end
     if not bit.bmask(fs.getPermissions(toPath, getuid()), permissions.write) then error(toPath .. ": Access denied", 2) end
     m.copy(p, toPath)
-    local inperms = textutils.unserializeFile(fs.getDir(path) .. "/.permissions")
-    local outperms = textutils.unserializeFile(fs.getDir(toPath) .. "/.permissions")
-    outperms[fs.getName(toPath)] = inperms[fs.getName(path)]
-    textutils.serializeFile(fs.getDir(toPath) .. "/.permissions", outperms)
+    copyPermissions(path, toPath)
 end
 
 function fs.delete(path)
     local m, p = getMount(path)
     if not bit.bmask(m.getPermissions(p, getuid()), permissions.delete) then error(path .. ": Access denied", 2) end
     m.delete(p)
-    local inperms = textutils.unserializeFile(fs.getDir(path) .. "/.permissions")
-    inperms[fs.getName(path)] = nil
-    textutils.serializeFile(fs.getDir(path) .. "/.permissions", inperms)
+    fs.deleteAllPermissions(path)
 end
 
 function fs.open(path, mode)

@@ -1,5 +1,4 @@
 print("Loading installer...")
-if type(({...})[1]) == "table" then shell = ({...})[1] end
 --[[--
 LibDeflate 1.0.0-release <br>
 Pure Lua compressor and decompressor with high compression ratio using
@@ -4221,6 +4220,7 @@ function CompleteViewController()
         fs.delete("/CCKit.lua")
         fs.delete("/CCLog.lua")
         fs.delete("/CCOSCrypto.lua")
+        if fs.exists("/install.lua") then fs.delete("/install.lua") end
         os.reboot()
     end
     function retval:viewDidLoad()
@@ -4239,3 +4239,4 @@ CCKit.CCMain(10, 2, 32, 17, "CCKernel2 Installer", WelcomeViewController, colors
 fs.delete("/CCKit.lua")
 fs.delete("/CCLog.lua")
 fs.delete("/CCOSCrypto.lua")
+if fs.exists("/install.lua") then fs.delete("/install.lua") end

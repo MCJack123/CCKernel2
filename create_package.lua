@@ -8,4 +8,8 @@ mfile.close()
 local pkg = archive.new()
 for k,v in pairs(manifest.files) do pkg.readFile(shell.resolve(k), k) end
 pkg.readFile(shell.resolve("manifest.ltn"), "manifest.ltn")
+pkg.readFile(shell.resolve("CCKit.lua"), "CCKit.lua")
+os.queueEvent("nosleep")
+os.pullEvent()
+write(".")
 pkg.write(shell.dir() .. "/CCKernel2.cpkg")

@@ -674,7 +674,7 @@ end
 
 function fs.makeDir(path)
     local m, p = getMount(path)
-    if fs.getDir(p) ~= "/" and fs.getDir(p) ~= "" and not fs.isDir(fs.getDir(p)) then error(fs.getDir(p) .. ": Directory not found") end
+    if fs.getDir(p) ~= "/" and fs.getDir(p) ~= "" and not fs.isDir(fs.getDir(p)) then error(fs.getDir(p) .. ": Directory not found", 2) end
     if fs.getDir(p) ~= "/" and fs.getDir(p) ~= "" and not bit.bmask(m.getPermissions(fs.getDir(p), getuid()), permissions.write) then error(path .. ": Access denied", 2) end
     m.makeDir(p)
     m.setPermissions(p, "*", fs.getPermissions(fs.getDir(path), "*"))

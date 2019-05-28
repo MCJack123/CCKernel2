@@ -69,7 +69,7 @@ local function create(data, size)
 
     function retval.readFile(realPath, pkgPath)
         local realFile = fs.open(realPath, "r")
-        if not realFile then error(realFile .. ": File not found", 2) end
+        if not realFile then error(realPath .. ": File not found", 2) end
         retval.makeDir(fs.getDir(pkgPath))
         local dir = getComponent(retval.data, split(fs.getDir(pkgPath), "/"))
         if type(dir) ~= "table" then error(fs.getDir(pkgPath) .. ": Directory not found", 2) end

@@ -1,4 +1,5 @@
 print("Loading installer...")
+if type(({...})[1]) == "table" then shell = ({...})[1] end
 --[[--
 LibDeflate 1.0.0-release <br>
 Pure Lua compressor and decompressor with high compression ratio using

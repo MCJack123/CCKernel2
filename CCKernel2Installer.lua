@@ -3940,7 +3940,6 @@ end
 
 local pkg
 if not fs.exists(shell.resolve("CCKernel2.cpkg")) then
-    print("Downloading CCKernel2 package...")
     local get = http.get("http://cppconsole.bruienne.com/base64get.php?url=https://raw.githubusercontent.com/MCJack123/CCKernel2/master/CCKernel2.cpkg")
     os.queueEvent("nosleep")
     os.pullEvent()
@@ -3951,11 +3950,10 @@ if not pkg then error("Could not find package") end
 pkg.writeFile("CCKit.lua", "/CCKit.lua")
 pkg.writeFile("CCLog.lua", "/CCLog.lua")
 pkg.writeFile("CCOSCrypto.lua", "/CCOSCrypto.lua")
-print("load")
 _G.CCLog = dofile("/CCLog.lua")
 if not CCLog then return end
-if not os.loadAPI("CCKit") then return end
-if not os.loadAPI("CCOSCrypto") then return end
+if not os.loadAPI("CCKit.lua") then return end
+if not os.loadAPI("CCOSCrypto.lua") then return end
 
 local function WelcomeViewController()
     local retval = CCKit.CCViewController()

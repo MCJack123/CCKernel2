@@ -255,6 +255,13 @@ function read(path)
     return create(textutils.unserialize(gz), string.len(gz))
 end
 
+function readstring(retval)
+    local gz = LibDeflate:DecompressGzip(retval)
+    os.queueEvent("nosleep")
+    os.pullEvent()
+    return create(textutils.unserialize(gz), string.len(gz))
+end
+
 function setCompressionLevel(level) compression_level = level end
 
 local archive = {new = new, load = load, read = read, setCompressionLevel = setCompressionLevel}

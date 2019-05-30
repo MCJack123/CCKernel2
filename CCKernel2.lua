@@ -357,6 +357,12 @@ function table.keys(t)
     return retval
 end
 
+function hasFunction(val)
+    if type(val) == "function" then return true
+    elseif type(val) == "table" then for k,v in pairs(val) do if hasFunction(v) then return true end end end
+    return false
+end
+
 function textutils.unserializeFile(path)
     local file = fs.open(path, "r")
     if file == nil then return nil end
@@ -366,9 +372,13 @@ function textutils.unserializeFile(path)
 end
 
 function textutils.serializeFile(path, tab)
+    if hasFunction(tab) then
+        kernel.log:traceback("Tried to serialize function")
+        error("Tried to serialize function", 2)
+    end
     local file = fs.open(path, "w")
     if file == nil then return end
-    file.write(textutils.serialize(tab))
+    file.write(_G.textutils.serialize(tab))
     file.close()
 end
 
@@ -1042,7 +1052,7 @@ end
 _G.error = function(message, level)
     if os.debug_enabled then 
         printError("Error caught: ", message)
-        nativeRun(_ENV, "/rom/programs/lua.lua")
+        nativeRun(getfenv(2), "/rom/programs/lua.lua")
     end
     local m = ({pcall(function() orig_error("test", 3) end)})[2]
     if _PID == nil or _PID == 0 then
@@ -1509,10 +1519,12 @@ local function serializeImpl( t, tTracking, sIndent )
     end
 end
 
-function textutils.serialize( t )
+function _G.textutils.serialize( t )
     local tTracking = {}
     return serializeImpl( t, tTracking, "" )
 end
+
+_G.textutils.serialise = _G.textutils.serialize
 
 -- Actual kernel runtime
 kernelLog:info("initializing kernel calls")
@@ -1539,12 +1551,6 @@ _G.signal = {
     SIGIO = 18,
     getName = function(sig) for k,v in pairs(signal) do if sig == v then return k end end end
 }
-
-function hasFunction(val)
-    if type(val) == "function" then return true
-    elseif type(val) == "table" then for k,v in pairs(val) do if hasFunction(v) then return true end end end
-    return false
-end
 
 local process_table = {}
 local nativeQueueEvent = os.queueEvent
@@ -1718,6 +1724,7 @@ function createPipeTerminal()
     end
     function retval.setCursorBlink() end
     function retval.isColor() return false end
+    function retval.isColour() return false end
     function retval.getSize() return retval.width, retval.height end
     function retval.scroll(lines) 
         local y = retval.screenOffset + retval.height
@@ -1734,6 +1741,12 @@ function createPipeTerminal()
     function retval.getBackgroundColor() return colors.black end
     function retval.setPaletteColor() end
     function retval.getPaletteColor() return 0, 0, 0 end
+    function retval.setTextColour() end
+    function retval.getTextColour() return colors.white end
+    function retval.setBackgroundColour() end
+    function retval.getBackgroundColour() return colors.black end
+    function retval.setPaletteColour() end
+    function retval.getPaletteColour() return 0, 0, 0 end
     retval.clear()
     return retval
 end
@@ -1767,6 +1780,7 @@ function createScreenPipeTerminal()
     end
     function retval.setCursorBlink() end
     function retval.isColor() return false end
+    function retval.isColour() return false end
     function retval.getSize() return retval.width, retval.height end
     function retval.scroll(lines) 
         for y = lines + 1, retval.height do retval.screen[y - lines] = retval.screen[y] end
@@ -1778,6 +1792,12 @@ function createScreenPipeTerminal()
     function retval.getBackgroundColor() return colors.black end
     function retval.setPaletteColor() end
     function retval.getPaletteColor() return 0, 0, 0 end
+    function retval.setTextColour() end
+    function retval.getTextColour() return colors.white end
+    function retval.setBackgroundColour() end
+    function retval.getBackgroundColour() return colors.black end
+    function retval.setPaletteColour() end
+    function retval.getPaletteColour() return 0, 0, 0 end
     retval.clear()
     return retval
 end
@@ -1814,12 +1834,15 @@ function kernel.isInputPiped() return pipes[_PID] ~= nil and pipes[_PID].write ~
 local orig_read = read
 function _G.read(...)
     if pipes[_PID] == nil or pipes[_PID].write == nil then return orig_read(...) else
+        pipes[_PID].reading = true
         while string.len(pipes[_PID].write) == 0 do 
             if not pipes[_PID].opened then return nil end
             os.pullEvent() 
         end
         local retval = pipes[_PID].write
         pipes[_PID].write = ""
+        pipes[_PID].reading = false
+        print(retval)
         return retval
     end
 end
@@ -1853,12 +1876,12 @@ local kernel_running = true
 table.insert(process_table, {coro=coroutine.create(nativeRun), path=firstProgram, started=false, filter=nil, args={...}, signals={}, user=0, vt=1, loggedin=false, env=_ENV, term=vts[1], main=true})
 local orig_shell = shell
 kernel.log:info("starting init program")
-local function killProcess(pid)
-    local oldparent = process_table[pid].parent
+local function killProcess(pid, result)
+    local oldparent = process_table[pid] and process_table[pid].parent
     process_table[pid] = nil
     pipes[pid] = nil
     pipefd[pid] = nil
-    if oldparent ~= nil then kernel.send(oldparent, "process_complete", pid, false) end
+    if oldparent ~= nil then kernel.send(oldparent, "process_complete", pid, false, result) end
     local restart = true
     while restart do
         restart = false
@@ -1995,7 +2018,7 @@ while kernel_running do
         local pid = table.maxn(process_table) + 1
         table.insert(process_table, pid, {coro=coroutine.create(nativeRun), path=path, started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=process_table[PID].loggedin, parent=PID, term=vts[process_table[PID].vt], main=false})
         local retval = {}
-        pipes[pid] = {opened=true}
+        pipes[pid] = {opened=true, reading=false}
         function retval.close(continue)
             pipes[pid].opened = false
             if not continue then
@@ -2003,6 +2026,7 @@ while kernel_running do
                 pipes[pid] = nil
             end
         end
+        function retval.isReading() return pipes[pid] and pipes[pid].reading or false end
         function retval.is_open() return pipes[pid] and pipes[pid].opened end
         function retval.pid() return pid end
         if string.find(mode, "r") ~= nil then
@@ -2047,37 +2071,40 @@ while kernel_running do
         local pid = table.maxn(process_table) + 1
         table.insert(process_table, pid, {coro=coroutine.create(nativeRun), path=path, started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=process_table[PID].loggedin, parent=PID, term=vts[process_table[PID].vt], main=false})
         local retval = {}
-        pipes[pid] = {opened=true}
+        pipes[pid] = {opened=true, reading=false}
         function retval.close(continue)
+            if not pipes[pid] then return end
             pipes[pid].opened = false
             if not continue then
                 kernel.kill(pid, signal.SIGINT)
                 pipes[pid] = nil
             end
         end
-        function retval.is_open() return pipes[pid] and pipes[pid].opened end
+        function retval.isReading() return pipes[pid] and pipes[pid].reading or false end
+        function retval.is_open() return pipes[pid] and pipes[pid].opened or false end
         function retval.pid() return pid end
         if string.find(mode, "r") ~= nil then
             pipes[pid].read = createScreenPipeTerminal()
             process_table[pid].term = pipes[pid].read
             retval.readLine = function()
-                if not pipes[pid].opened then return nil end
+                if not pipes[pid] or not pipes[pid].opened then return nil end
                 return table.concat(pipes[pid].read.screen[pipes[pid].read.cursorX])
             end
             retval.readAll = function()
-                if not pipes[pid].opened then return nil end
+                if not pipes[pid] or not pipes[pid].opened then return nil end
                 local retval = {}
                 for k,v in pairs(pipes[pid].read.screen) do retval[k] = table.concat(v) end
                 return table.concat(retval, "\n")
             end
+            retval.term = function() return pipes[pid].read end
         end
         if string.find(mode, "w") ~= nil then
             pipes[pid].write = ""
             retval.write = function(d) 
-                if pipes[pid].opened then pipes[pid].write = pipes[pid].write .. d end
+                if not pipes[pid] or pipes[pid].opened then pipes[pid].write = pipes[pid].write .. d end
             end
             retval.writeLine = function(d) 
-                if pipes[pid].opened then pipes[pid].write = pipes[pid].write .. d .. "\n" end
+                if not pipes[pid] or pipes[pid].opened then pipes[pid].write = pipes[pid].write .. d .. "\n" end
             end
         end
         pipefd[pid] = retval
@@ -2115,7 +2142,10 @@ while kernel_running do
                         --if v.env ~= nil then for r,n in pairs(v.env) do _G[r] = n end end
                         --shell = nil
                         thisVT = v.vt
-                        term.redirect(v.term)
+                        local redok, rederr = pcall(function() term.redirect(v.term) end)
+                        if not redok then
+                            kernel.log:error("Could not redirect terminal for PID " .. k .. ": " .. rederr)
+                        end
                         err, res = coroutine.resume(v.coro, unpack(e))
                         v.term = term.current()
                         term.redirect(nativeNative())
@@ -2137,7 +2167,10 @@ while kernel_running do
                         os.sleep(5)
                     end
                     thisVT = v.vt
-                    term.redirect(v.term)
+                    local redok, rederr = pcall(function() term.redirect(v.term) end)
+                    if not redok then
+                        kernel.log:error("Could not redirect terminal for PID " .. k .. ": " .. rederr)
+                    end
                     if v.env == nil then v.env = {} end
                     err, res = coroutine.resume(v.coro, v.env, v.path, unpack(v.args))
                     v.term = term.current()
@@ -2149,14 +2182,14 @@ while kernel_running do
                     v.started = true
                     v.user = _G._UID
                 end
-                if not err then table.insert(delete, {f=k, s=false})
+                if not err then table.insert(delete, {f=k, s=false, r=res})
                 elseif coroutine.status(v.coro) == "dead" then table.insert(delete, {f=k, s=true, r=res})
                 elseif res ~= nil then v.filter = res else v.filter = nil end -- assuming every yield is for pullEvent, this may be unsafe 
             end
         end
         for k,v in pairs(delete) do 
             if process_table[v.f] and process_table[v.f].main then vts[process_table[v.f].vt].started = false end
-            killProcess(v.f)
+            killProcess(v.f, v.r)
         end
         --if not loggedin then break end
     end

@@ -1783,8 +1783,8 @@ function createScreenPipeTerminal()
     function retval.isColour() return false end
     function retval.getSize() return retval.width, retval.height end
     function retval.scroll(lines) 
-        for y = lines + 1, retval.height do retval.screen[y - lines] = retval.screen[y] end
-        for y = retval.height - lines, retval.height do for x = 1, retval.width do retval.screen[y][x] = " " end end
+        for y = lines + 1, retval.height do retval.screen[y - lines] = deepcopy(retval.screen[y]) end
+        for y = retval.height - lines + 1, retval.height do for x = 1, retval.width do retval.screen[y][x] = " " end end
     end
     function retval.setTextColor() end
     function retval.getTextColor() return colors.white end
@@ -1997,9 +1997,13 @@ while kernel_running do
         local path = table.remove(e, 1)
         local env = pidenv[PID]
         local pid = table.maxn(process_table) + 1
-        table.insert(process_table, pid, {coro=coroutine.create(nativeRun), path=path, started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=process_table[PID].loggedin, parent=PID, term=process_table[PID].term, main=false})
-        pidenv[PID] = nil
-        kernel.send(PID, "process_started", pid)
+        if process_table[PID] then 
+            table.insert(process_table, pid, {coro=coroutine.create(nativeRun), path=path, started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=process_table[PID].loggedin, parent=PID, term=process_table[PID].term, main=false})
+            pidenv[PID] = nil
+            kernel.send(PID, "process_started", pid)
+        else
+            kernel.send(PID, "process_started", -1)
+        end
     elseif e[1] == "kcall_fork_process" then
         table.remove(e, 1)
         local func = table.remove(e, 1)
@@ -2096,7 +2100,7 @@ while kernel_running do
                 for k,v in pairs(pipes[pid].read.screen) do retval[k] = table.concat(v) end
                 return table.concat(retval, "\n")
             end
-            retval.term = function() return pipes[pid].read end
+            retval.term = function() return pipes[pid] and pipes[pid].read or nil end
         end
         if string.find(mode, "w") ~= nil then
             pipes[pid].write = ""

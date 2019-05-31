@@ -1,0 +1,5 @@
+{
+    name = "rsh",
+    description = "RSH Server",
+    exec = {"/usr/sbin/rshd.lua"}
+}

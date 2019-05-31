@@ -124,6 +124,11 @@ All of the default fs functions have been overridden to add permission checks an
   * mode: The file mode to open ("r" or "w")
   * env: Optional, the environment table of the new program (otherwise, ...)
   * ...: Any arguments to pass to the file
+* *handle* kernel.popen_screen(*string* path, *string* mode\[, *table* env\], ...): Starts a process from a file and returns a handle for reading or writing depending on the mode. (readAll() returns the contents of the screen instead of the most recent text.)
+  * path: The path to run
+  * mode: The file mode to open ("r" or "w")
+  * env: Optional, the environment table of the new program (otherwise, ...)
+  * ...: Any arguments to pass to the file
 * *boolean* kernel.isPiped(): Returns whether the current program is being piped.
 * *boolean* kernel.isOutputPiped(): Returns whether the output is being piped.
 * *boolean* kernel.isInputPiped(): Returns whether the input is being piped.

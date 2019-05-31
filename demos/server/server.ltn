@@ -1,5 +1,5 @@
 {
     name = "server",
     description = "HTTP Server",
-    exec = {"/usr/bin/server.lua", "80"}
+    exec = {"/usr/sbin/server.lua", "80"}
 }

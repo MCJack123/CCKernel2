@@ -1,0 +1,9 @@
+{
+    files = {
+        ["server.ltn"] = "/etc/init/system/services/server.ltn",
+        ["server.lua"] = "/usr/sbin/server.lua"
+    },
+    directories = {
+        "/usr/sbin"
+    }
+}

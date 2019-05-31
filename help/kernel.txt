@@ -2,6 +2,7 @@ Functions in the kernel API:
 kernel.exec(path[, env], ...)
 kernel.fork(name, func[, env], ...)
 kernel.popen(path, mode[, env], ...)
+kernel.popen_screen(path, mode[, env], ...)
 kernel.isPiped()
 kernel.isOutputPiped()
 kernel.isInputPiped()

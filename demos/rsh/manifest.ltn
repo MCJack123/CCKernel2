@@ -1,0 +1,10 @@
+{
+    files = {
+        ["rsh.ltn"] = "/etc/init/system/services/rsh.ltn",
+        ["rshd.lua"] = "/usr/sbin/rshd.lua",
+        ["rsh.lua"] = "/usr/bin/rsh.lua"
+    },
+    directories = {
+        "/usr/sbin"
+    }
+}

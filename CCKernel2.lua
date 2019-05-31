@@ -146,6 +146,7 @@ kernelLog.showInDefaultLog = true
 
 -- Virtual terminals
 local vts = {}
+local pipevts = {}
 local currentVT = 1
 local thisVT = 1
 i = 1
@@ -172,18 +173,26 @@ local nativeSetGraphics = term.setGraphicsMode
 local nativeGetGraphics = term.getGraphicsMode
 local nativeSetPixel = term.setPixel
 local nativeGetPixel = term.getPixel
-function term.native() return vts[thisVT] end
+function term.native() 
+    if pipevts[_PID] then
+        local retval = {}
+        for k,v in pairs(pipevts[_PID]) do if type(v) == "function" then retval[k] = v end end
+        return retval
+    else return vts[thisVT] end
+end
 if term.setGraphicsMode ~= nil then
     function term.setGraphicsMode(mode)
+        if thisVT == 9 then return end
         vts[thisVT].graphicsMode = mode
         if thisVT == currentVT then nativeSetGraphics(mode) end
     end
     function term.setPixel(x, y, color)
+        if thisVT == 9 then return end
         vts[thisVT].pixels[x][y] = color
         if thisVT == currentVT then nativeSetPixel(x, y, color) end
     end
-    function term.getGraphicsMode() return vts[thisVT].graphicsMode end
-    function term.getPixel(x, y) return vts[thisVT].pixels[x][y] end
+    function term.getGraphicsMode() return thisVT ~= 9 and vts[thisVT].graphicsMode end
+    function term.getPixel(x, y) return thisVT ~= 9 and vts[thisVT].pixels[x][y] or colors.black end
 end
 
 CCLog.default.term = vts[1]
@@ -898,15 +907,20 @@ function os.run( _tEnv, _sPath, ... )
     local tEnv = _tEnv
     setmetatable( tEnv, { __index = _G } )
     local pid = kernel.exec( _sPath, tEnv, ... )
-    local _, p, s = os.pullEvent("process_complete")
-    if p ~= pid then while p ~= pid do 
-        _, p, s = os.pullEvent("process_complete") 
-        if type(p) ~= "number" then 
-            kernel.log:traceback("Failed to run " .. _sPath .. ", PID " .. pid) 
-            error("Failed to run " .. _sPath .. ", PID " .. pid, 3)
+    while true do
+        local e = {os.pullEvent()}
+        if e[1] == "process_complete" and e[2] == pid then
+            if type(e[2]) ~= "number" then 
+                kernel.log:traceback("Failed to run " .. _sPath .. ", PID " .. pid) 
+                error("Failed to run " .. _sPath .. ", PID " .. pid, 3)
+            end
+            return e[3]
+        elseif (e[1] == "key" or e[1] == "char" or e[1] == "key_up" or e[1] == "paste" or
+            e[1] == "mouse_click" or e[1] == "mouse_up" or e[1] == "mouse_drag" or 
+            e[1] == "mouse_scroll" or e[1] == "monitor_touch") and thisVT == 9 then
+            kernel.send(pid, table.unpack(e))
         end
-    end end
-    return s
+    end
 end
 
 -- User system
@@ -1751,27 +1765,53 @@ function createPipeTerminal()
     return retval
 end
 
+local function cp(color) return string.sub("0123456789abcdef", math.log(color) / math.log(2) + 1, math.log(color) / math.log(2) + 1) end
+
 function createScreenPipeTerminal()
     local retval = {}
     retval.screen = {}
+    retval.fg = {}
+    retval.bg = {}
     retval.width, retval.height = term.getSize()
     retval.cursorX = 1
     retval.cursorY = 1
+    retval.backgroundColor = colors.black
+    retval.textColor = colors.white
     function retval.write(text)
-        if retval.cursorX >= retval.width then return end
+        if retval.cursorX > retval.width then return end
         retval.screen[retval.cursorY][retval.cursorX] = string.sub(text, 1, 1)
+        retval.fg[retval.cursorY][retval.cursorX] = cp(retval.textColor)
+        retval.bg[retval.cursorY][retval.cursorX] = cp(retval.backgroundColor)
         retval.cursorX = retval.cursorX + 1
         if string.len(text) > 1 then retval.write(string.sub(text, 2)) end
     end
-    retval.blit = retval.write
+    function retval.blit(text, fg, bg)
+        if string.len(text) ~= string.len(fg) or string.len(fg) ~= string.len(bg) then error("Arguments must be the same length", 2) end
+        if retval.cursorX > retval.width then return end
+        retval.screen[retval.cursorY][retval.cursorX] = string.sub(text, 1, 1)
+        retval.fg[retval.cursorY][retval.cursorX] = string.sub(fg, 1, 1)
+        retval.bg[retval.cursorY][retval.cursorX] = string.sub(bg, 1, 1)
+        retval.cursorX = retval.cursorX + 1
+        if string.len(text) > 1 and string.len(fg) > 1 and string.len(bg) > 1 then retval.blit(string.sub(text, 2), string.sub(fg, 2), string.sub(bg, 2)) end
+    end
     function retval.clear() 
         for y = 1, retval.height do
             retval.screen[y] = {}
-            for x = 1, retval.width do retval.screen[y][x] = " " end
+            retval.fg[y] = {}
+            retval.bg[y] = {}
+            for x = 1, retval.width do 
+                retval.screen[y][x] = " " 
+                retval.fg[y][x] = cp(retval.textColor)
+                retval.bg[y][x] = cp(retval.backgroundColor)
+            end
         end
     end
     function retval.clearLine() 
-        for x = 1, retval.width do retval.screen[retval.cursorY][x] = " " end
+        for x = 1, retval.width do 
+            retval.screen[retval.cursorY][x] = " " 
+            retval.fg[retval.cursorY][x] = cp(retval.textColor)
+            retval.bg[retval.cursorY][x] = cp(retval.backgroundColor)
+        end
     end
     function retval.getCursorPos() return retval.cursorX, retval.cursorY end
     function retval.setCursorPos(x, y)
@@ -1779,25 +1819,33 @@ function createScreenPipeTerminal()
         retval.cursorY = y
     end
     function retval.setCursorBlink() end
-    function retval.isColor() return false end
-    function retval.isColour() return false end
+    function retval.isColor() return true end
+    function retval.isColour() return true end
     function retval.getSize() return retval.width, retval.height end
     function retval.scroll(lines) 
-        for y = lines + 1, retval.height do retval.screen[y - lines] = deepcopy(retval.screen[y]) end
-        for y = retval.height - lines + 1, retval.height do for x = 1, retval.width do retval.screen[y][x] = " " end end
+        for y = lines + 1, retval.height do 
+            retval.screen[y-lines] = deepcopy(retval.screen[y])
+            retval.fg[y-lines] = deepcopy(retval.fg[y])
+            retval.bg[y-lines] = deepcopy(retval.bg[y])
+        end
+        for y = retval.height - lines + 1, retval.height do for x = 1, retval.width do 
+            retval.screen[y][x] = " "
+            retval.fg[y][x] = cp(retval.textColor)
+            retval.bg[y][x] = cp(retval.backgroundColor)
+        end end
     end
-    function retval.setTextColor() end
-    function retval.getTextColor() return colors.white end
-    function retval.setBackgroundColor() end
-    function retval.getBackgroundColor() return colors.black end
-    function retval.setPaletteColor() end
-    function retval.getPaletteColor() return 0, 0, 0 end
-    function retval.setTextColour() end
-    function retval.getTextColour() return colors.white end
-    function retval.setBackgroundColour() end
-    function retval.getBackgroundColour() return colors.black end
-    function retval.setPaletteColour() end
-    function retval.getPaletteColour() return 0, 0, 0 end
+    function retval.setTextColor(c) retval.textColor = c end
+    function retval.getTextColor() return retval.textColor end
+    function retval.setBackgroundColor(c) retval.backgroundColor = c end
+    function retval.getBackgroundColor() return retval.backgroundColor end
+    function retval.setTextColour(c) retval.textColor = c end
+    function retval.getTextColour() return retval.textColor end
+    function retval.setBackgroundColour(c) retval.backgroundColor = c end
+    function retval.getBackgroundColour() return retval.backgroundColor end
+    retval.getPaletteColor = term.getPaletteColor
+    retval.setPaletteColor = term.setPaletteColor
+    retval.getPaletteColour = term.getPaletteColour
+    retval.setPaletteColour = term.setPaletteColour
     retval.clear()
     return retval
 end
@@ -1881,6 +1929,7 @@ local function killProcess(pid, result)
     process_table[pid] = nil
     pipes[pid] = nil
     pipefd[pid] = nil
+    pipevts[pid] = nil
     if oldparent ~= nil then kernel.send(oldparent, "process_complete", pid, false, result) end
     local restart = true
     while restart do
@@ -1907,7 +1956,7 @@ while kernel_running do
         kernel_running = false
         e = {"kernel_stop"}
     end
-    if e[1] == "key" and keys.getName(e[2]) ~= nil then
+    if e[1] == "key" and type(e[2]) == "number" and keys.getName(e[2]) ~= nil then
         if string.find(keys.getName(e[2]), "f%d+") == 1 and bit.band(modifiers, 3) == 3 then
             local num = tonumber(string.sub(keys.getName(e[2]), 2))
             if num >= 1 and num <= 8 then
@@ -1940,7 +1989,7 @@ while kernel_running do
         elseif e[2] == keys.leftShift then
             modifiers = bit.bor(modifiers, 4)
         end
-    elseif e[1] == "key_up" and keys.getName(e[2]) ~= nil then
+    elseif e[1] == "key_up" and type(e[2]) == "number" and keys.getName(e[2]) ~= nil then
         if e[2] == keys.leftCtrl then
             modifiers = bit.band(modifiers, bit.bnot(1))
         elseif e[2] == keys.leftAlt then
@@ -1999,6 +2048,7 @@ while kernel_running do
         local pid = table.maxn(process_table) + 1
         if process_table[PID] then 
             table.insert(process_table, pid, {coro=coroutine.create(nativeRun), path=path, started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=process_table[PID].loggedin, parent=PID, term=process_table[PID].term, main=false})
+            if pipevts[PID] then pipevts[pid] = pipevts[PID] end
             pidenv[PID] = nil
             kernel.send(PID, "process_started", pid)
         else
@@ -2013,6 +2063,7 @@ while kernel_running do
         local env = pidenv[PID]
         if process_table[PID] == nil then error("Parent doesn't exist! " .. PID) end
         table.insert(process_table, pid, {coro=coroutine.create(func), path="["..name.."]", started=false, stopped=false, filter=nil, args=e, env=env, signals={}, user=process_table[PID].user, vt=process_table[PID].vt, loggedin=process_table[PID].loggedin, parent=PID, term=process_table[PID].term, main=false})
+        if pipevts[PID] then pipevts[pid] = pipevts[PID] end
         kernel.send(PID, "process_started", pid)
     elseif e[1] == "kcall_open_pipe" then
         table.remove(e, 1)
@@ -2034,8 +2085,9 @@ while kernel_running do
         function retval.is_open() return pipes[pid] and pipes[pid].opened end
         function retval.pid() return pid end
         if string.find(mode, "r") ~= nil then
-            pipes[pid].read = createPipeTerminal()
-            process_table[pid].term = pipes[pid].read
+            pipevts[pid] = createPipeTerminal()
+            pipes[pid].read = pipevts[pid]
+            process_table[pid].term = pipevts[pid]
             retval.readLine = function()
                 if not pipes[pid].opened then return nil end
                 if pipes[pid].read.readOffset >= pipes[pid].read.screenOffset + pipes[pid].read.height then return nil end
@@ -2088,8 +2140,10 @@ while kernel_running do
         function retval.is_open() return pipes[pid] and pipes[pid].opened or false end
         function retval.pid() return pid end
         if string.find(mode, "r") ~= nil then
-            pipes[pid].read = createScreenPipeTerminal()
-            process_table[pid].term = pipes[pid].read
+            pipevts[pid] = createScreenPipeTerminal()
+            pipes[pid].read = pipevts[pid]
+            process_table[pid].term = pipevts[pid]
+            process_table[pid].vt = 9
             retval.readLine = function()
                 if not pipes[pid] or not pipes[pid].opened then return nil end
                 return table.concat(pipes[pid].read.screen[pipes[pid].read.cursorX])
@@ -2098,6 +2152,18 @@ while kernel_running do
                 if not pipes[pid] or not pipes[pid].opened then return nil end
                 local retval = {}
                 for k,v in pairs(pipes[pid].read.screen) do retval[k] = table.concat(v) end
+                return table.concat(retval, "\n")
+            end
+            retval.readBackgroundColors = function()
+                if not pipes[pid] or not pipes[pid].opened then return nil end
+                local retval = {}
+                for k,v in pairs(pipes[pid].read.bg) do retval[k] = table.concat(v) end
+                return table.concat(retval, "\n")
+            end
+            retval.readTextColors = function()
+                if not pipes[pid] or not pipes[pid].opened then return nil end
+                local retval = {}
+                for k,v in pairs(pipes[pid].read.fg) do retval[k] = table.concat(v) end
                 return table.concat(retval, "\n")
             end
             retval.term = function() return pipes[pid] and pipes[pid].read or nil end
@@ -2132,7 +2198,7 @@ while kernel_running do
         local loggedin = false
         for k,v in pairs(process_table) do
             if v.loggedin then loggedin = true end
-            if not v.stopped and (v.filter == nil or v.filter == e[1]) and (v.vt == currentVT or not (
+            if not v.stopped and (v.filter == nil or v.filter == e[1]) and (v.vt == currentVT or PID ~= 0 or not (
                 e[1] == "key" or e[1] == "char" or e[1] == "key_up" or e[1] == "paste" or
                 e[1] == "mouse_click" or e[1] == "mouse_up" or e[1] == "mouse_drag" or 
                 e[1] == "mouse_scroll" or e[1] == "monitor_touch")) then
@@ -2166,7 +2232,7 @@ while kernel_running do
                     --if v.env ~= nil then for r,n in pairs(v.env) do _G[r] = n end end
                     --shell = nil
                     --_ENV.shell = nil
-                    if vts[v.vt] == nil then
+                    if vts[v.vt] == nil and v.vt ~= 9 then
                         print(v.vt)
                         os.sleep(5)
                     end

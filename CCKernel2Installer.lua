@@ -4235,7 +4235,48 @@ function CompleteViewController()
     return retval
 end
 
-CCKit.CCMain(10, 2, 32, 17, "CCKernel2 Installer", WelcomeViewController, colors.blue, "CCKernel2 Installer", true)
+if ... == "--quiet" and fs.exists("unattended.ltn") then
+	local file = fs.open("unattended.ltn", "r")
+	local s = textutils.unserialize(file.readAll())
+	file.close()
+	local manifest_file = pkg.open("manifest.ltn", "r")
+	local manifest = textutils.unserialize(manifest_file.readAll())
+	manifest_file.close()
+	local filecount = 0
+	for k,v in pairs(manifest.files) do filecount = filecount + 1 end
+	print("Preparing...")
+	for k,v in pairs(manifest.directories) do fs.makeDir(v) end
+	local completed = 0
+	for src,dest in pairs(manifest.files) do
+		local x, y = term.getCursorPos()
+		term.setCursorPos(1, y)
+		write("Installing (" .. completed + 1 .. "/" .. filecount .. ")")
+		pkg.writeFile(src, dest)
+		completed = completed + 1
+		os.queueEvent("nosleep")
+		os.pullEvent()
+	end
+	print()
+	print("Setting up...")
+	local file = fs.open("/etc/passwd", "w")
+	file.write(textutils.serialize({
+		[-1] = {name = "superroot", fullName = "Kernel Process", password = nil},
+		[0] = {name = "root", fullName = "Superuser", password = nil},
+		[1] = {name = s.shortName, fullName = s.fullName, password = CCOSCrypto.sha256(s.password)}
+	}))
+	file.close()
+	if s.startup then
+		local file = fs.open("/startup.lua", fs.exists("/startup.lua") and "a" or "w")
+		file.writeLine("os.queueEvent(\"start\")")
+		file.writeLine("shell.run(\"/kernel.lua\")")
+		file.writeLine("os.shutdown()")
+		file.close()
+	end
+	os.reboot()
+	return
+else
+	CCKit.CCMain(10, 2, 32, 17, "CCKernel2 Installer", WelcomeViewController, colors.blue, "CCKernel2 Installer", true)
+end
 fs.delete("/CCKit.lua")
 fs.delete("/CCLog.lua")
 fs.delete("/CCOSCrypto.lua")

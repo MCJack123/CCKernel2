@@ -1,0 +1,79 @@
+<html>
+    <head>
+        <title>Online CCKernel2 RSH Client</title>
+        <style>
+            .f0 {color: #F0F0F0;}
+            .f1 {color: #F2B233;}
+            .f2 {color: #E57FD8;}
+            .f3 {color: #99B2F2;}
+            .f4 {color: #DEDE6C;}
+            .f5 {color: #7FCC19;}
+            .f6 {color: #F2B2CC;}
+            .f7 {color: #4C4C4C;}
+            .f8 {color: #999999;}
+            .f9 {color: #4C99B2;}
+            .fa {color: #B266E5;}
+            .fb {color: #3366CC;}
+            .fc {color: #7F664C;}
+            .fd {color: #57A64E;}
+            .fe {color: #CC4C4C;}
+            .ff {color: #191919;}
+            .b0 {background-color: #F0F0F0;}
+            .b1 {background-color: #F2B233;}
+            .b2 {background-color: #E57FD8;}
+            .b3 {background-color: #99B2F2;}
+            .b4 {background-color: #DEDE6C;}
+            .b5 {background-color: #7FCC19;}
+            .b6 {background-color: #F2B2CC;}
+            .b7 {background-color: #4C4C4C;}
+            .b8 {background-color: #999999;}
+            .b9 {background-color: #4C99B2;}
+            .ba {background-color: #B266E5;}
+            .bb {background-color: #3366CC;}
+            .bc {background-color: #7F664C;}
+            .bd {background-color: #57A64E;}
+            .be {background-color: #CC4C4C;}
+            .bf {background-color: #191919;}
+            body {
+                font-family: Arial, Helvetica, sans-serif;
+            }
+        </style>
+        <script>
+            function http_get(url) {
+                var xhr = new XMLHttpRequest();
+                xhr.open("GET", url);
+                xhr.send();
+                return xhr.responseText;
+            }
+            function http_post(url, data) {
+                var xhr = new XMLHttpRequest();
+                xhr.open("POST", url);
+                xhr.send(data);
+                return xhr.responseText;
+            }
+            var sessionID = 0;
+            function connect() {
+                var ip = document.getElementById("ip").value;
+                sessionID = parseInt(http_get("http://" + ip + ":8022/open"))
+                if (sessionID == 0) alert("Could not connect to server.");
+                else {
+                    document.getElementById("connect").style.display = "none";
+                    document.getElementById("main").style.display = "default";
+                    updateTerminal();
+                }
+            }
+        </script>
+    </head>
+    <body>
+        <h1>CCKernel2 RSH Client</h1>
+        <div id="connect">
+            <h3>Connect to server</h3>
+            <input type="text" id="ip" placeholder="IP Address">
+            <button type="button" onClick="connect()">Connect</button>
+        </div>
+        <div id="main" style="display:none;">
+            <textarea id="input" onChange="sendText()"></textarea>
+            <div id="terminal"></div>
+        </div>
+    </body>
+</html>

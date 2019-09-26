@@ -1,7 +1,7 @@
 if fs.setPermissions == nil then error("This requires CCKernel2.") end
 args = { ... }
-if args[3] == nil or args[1] == "--help" then
-    print("Usage: chmod <file> <uid> <perms>")
+if args[2] == nil or args[1] == "--help" then
+    print("Usage: chown <file> <uid>")
     return
 end
 if not fs.exists(args[1]) then error(args[1] .. ": File not found") end

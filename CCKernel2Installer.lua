@@ -3797,14 +3797,16 @@ function read(path)
         b = file.read()
     end
     file.close()
-    local gz = LibDeflate:DecompressGzip(retval)
+    local gz, err = LibDeflate:DecompressGzip(retval)
+    if gz == nil then error(err) end
     os.queueEvent("nosleep")
     os.pullEvent()
     return create(textutils.unserialize(gz), string.len(gz))
 end
 
 function readstring(retval)
-    local gz = LibDeflate:DecompressGzip(retval)
+    local gz, err = LibDeflate:DecompressGzip(retval)
+    if gz == nil then error(err) end
     os.queueEvent("nosleep")
     os.pullEvent()
     return create(textutils.unserialize(gz), string.len(gz))

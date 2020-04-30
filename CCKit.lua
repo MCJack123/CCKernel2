@@ -214,11 +214,11 @@ local colorString = "0123456789abcdef"
 CCGraphics = {}
 
 local function cp(color)
-    if color == 0 then return 0 end
+    if color == 0 then return 0 elseif color == 0xFFFFFFFF then return 32 end
     local recurses = 1
     local cc = color
     while cc ~= 1 do 
-        cc = bit.brshift(cc, 1)
+        cc = bit.blogic_rshift(cc, 1)
         recurses = recurses + 1
     end
     --print(recurses .. " " .. color .. " \"" .. string.sub(colorString, recurses, recurses) .. "\"")
@@ -708,10 +708,11 @@ end
 local colorString = "0123456789abcdef"
 
 local function cp(color)
+    if color == 0 then return 0 end
     local recurses = 1
     local cc = color
     while cc ~= 1 do 
-        cc = bit.brshift(cc, 1)
+        cc = bit.blogic_rshift(cc, 1)
         recurses = recurses + 1
     end
     --print(recurses .. " " .. color .. " \"" .. string.sub(colorString, recurses, recurses) .. "\"")

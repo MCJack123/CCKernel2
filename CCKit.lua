@@ -214,6 +214,7 @@ local colorString = "0123456789abcdef"
 CCGraphics = {}
 
 local function cp(color)
+    if color == 0 then return 0 end
     local recurses = 1
     local cc = color
     while cc ~= 1 do 

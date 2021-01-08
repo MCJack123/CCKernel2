@@ -843,12 +843,19 @@ local function tokenise( ... )
     return tWords
 end
 
-_G.loadfile = function( _sFile, _tEnv )
+_G.loadfile = function( _sFile, _sMode, _tEnv )
+    if type(_sMode) == "table" and _tEnv == nil then
+        _tEnv = _sMode
+        _sMode = nil
+    end
     if type( _sFile ) ~= "string" then
         error( "bad argument #1 (expected string, got " .. type( _sFile ) .. ")", 2 ) 
     end
+    if _sMode ~= nil and type( _sMode ) ~= "string" then
+        error( "bad argument #2 (expected string, got " .. type( _sMode ) .. ")", 2 )
+    end
     if _tEnv ~= nil and type( _tEnv ) ~= "table" then
-        error( "bad argument #2 (expected table, got " .. type( _tEnv ) .. ")", 2 ) 
+        error( "bad argument #3 (expected table, got " .. type( _tEnv ) .. ")", 2 ) 
     end
     if not fs.hasPermissions( _sFile, nil, fs.permissions.execute ) then return nil, _sFile .. ": Permission denied" end
     local file = fs.open( _sFile, "r" )
@@ -881,7 +888,7 @@ _G.loadfile = function( _sFile, _tEnv )
                 end end
             end
         end
-        local func, err = load( script, fs.getName( _sFile ), "t", _tEnv )
+        local func, err = load( script, fs.getName( _sFile ), _sMode, _tEnv )
         if fs.hasPermissions( _sFile, nil, fs.permissions.setuid ) and err == nil then 
             return function( ... )
                 local args = { ... }
